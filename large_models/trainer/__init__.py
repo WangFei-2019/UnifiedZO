@@ -7,9 +7,14 @@ from .hizoo_trainer import HiZOOTrainer
 from .pzo_trainer import PZOTrainer
 from .fzoo_trainer import FZooTrainer
 from .zo_adamu_trainer import ZOAdaMUTrainer
-# [AdaLeZO Integration] Import the new trainer
 from .adalezo_trainer import AdaLeZOTrainer
 from .schedulers import zo_lr_scheduler, hessian_smooth_scheduler
+
+# AdaLeZO Plus
+from .adalozo_trainer import AdaLoZOTrainer
+from .adazoadamu_trainer import AdaZOAdaMUTrainer
+from .adahizoo_trainer import AdaHiZOOTrainer
+from .adapzo_trainer import AdaPZOTrainer
 
 def get_trainer_class(args):
     """
@@ -27,9 +32,18 @@ def get_trainer_class(args):
         return PZOTrainer
     elif args.trainer == "fzoo":
         return FZooTrainer
-    # [AdaLeZO Integration] Return AdaLeZO class
     elif args.trainer == "adalezo":
         return AdaLeZOTrainer
+
+    # AdaLeZO Plus
+    elif args.trainer == "adazoadamu":
+        return AdaZOAdaMUTrainer
+    elif args.trainer == "adalozo":
+        return AdaLoZOTrainer
+    elif args.trainer == "adahizoo":
+        return AdaHiZOOTrainer
+    elif args.trainer == "adapzo":
+        return AdaPZOTrainer
     else:
         # Fallback to base or standard Trainer if "regular"
         return BaseZOTrainer

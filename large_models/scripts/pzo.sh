@@ -72,7 +72,7 @@ python run.py \
     --output_dir result-pzo/$TASK-${MODEL_NAME}-$TAG --tag $TAG \
     --train_set_seed $SEED --logging_steps 10 --max_steps $STEPS \
     --num_train $TRAIN --num_dev $DEV --num_eval $EVAL \
-    --trainer pzo --load_float16 \
+    --trainer pzo \
     --learning_rate $LR --zo_eps $EPS --per_device_train_batch_size $BS \
     --lr_scheduler_type "constant" \
     --load_best_model_at_end --eval_strategy steps --save_strategy steps --save_total_limit 1 \

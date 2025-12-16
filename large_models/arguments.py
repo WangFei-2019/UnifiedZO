@@ -18,9 +18,9 @@ class ZOTrainingArguments(TrainingArguments):
         default="facebook/opt-125m",
         metadata={"help": "Path to pretrained model or model identifier from huggingface.co/models"}
     )
-    load_float16: bool = field(default=False, metadata={"help": "Load model in fp16."})
-    load_bfloat16: bool = field(default=False, metadata={"help": "Load model in bf16."})
-    load_int8: bool = field(default=False, metadata={"help": "Load model in int8 (8-bit quantization)."})
+    # load_float16: bool = field(default=False, metadata={"help": "Load model in fp16."})
+    # load_bfloat16: bool = field(default=False, metadata={"help": "Load model in bf16."})
+    # load_int8: bool = field(default=False, metadata={"help": "Load model in int8 (8-bit quantization)."})
     no_auto_device: bool = field(default=False, metadata={"help": "Disable auto device mapping (useful for FSDP)."})
     max_length: int = field(default=2048, metadata={"help": "Max sequence length."})
 

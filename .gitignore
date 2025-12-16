@@ -2,6 +2,6 @@ result-*
 *.pyc
 wandb
 MeZO
-.txt
-code_to_text.py
+*.txt
+code_to_txt.py
 trash

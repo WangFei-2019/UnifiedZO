@@ -116,12 +116,12 @@ def main():
         #     if tokenizer.pad_token_id is None:
         #         tokenizer.pad_token_id = 0  # <unk> or often set to eos_token_id
 
-        # Determine Torch Data Type
-        torch_dtype = torch.float32
-        if args.load_float16:
-            torch_dtype = torch.float16
-        elif args.load_bfloat16:
-            torch_dtype = torch.bfloat16
+        # # Determine Torch Data Type
+        # torch_dtype = torch.float32
+        # if args.load_float16:
+        #     torch_dtype = torch.float16
+        # elif args.load_bfloat16:
+        #     torch_dtype = torch.bfloat16
 
         # Initialize Model
         # device_map='auto' handles model placement (CPU/GPU)
@@ -129,8 +129,8 @@ def main():
             args.model_name,
             config=config,
             device_map='auto' if not args.no_auto_device else None,
-            torch_dtype=torch_dtype,
-            load_in_8bit=args.load_int8,
+            torch_dtype='auto',
+            # load_in_8bit=args.load_int8,
             trust_remote_code=True
         )
         model.eval()
@@ -245,7 +245,7 @@ def main():
 
                 # if args.trainer == "regular":
                 #     pass
-                if args.trainer == "pzo":
+                if args.trainer == "pzo" or args.trainer == "adapzo":
                     if getattr(args, 'logits', False):
                         from trainer.utils import forward_wrap_with_option_len_pzo_logits
                         model.forward = forward_wrap_with_option_len_pzo_logits.__get__(model, type(model))

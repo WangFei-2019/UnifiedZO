@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 # Benchmark using Refactored Trainer Classes directly with PEFT support
-# Requires: ZO_all_code structure (large_models package) and peft library
+# Includes detailed Time Profiling (Perturb/Forward/Update) and Memory Statistics
 
 import torch
 import time
 import numpy as np
+import types
 from fire import Fire
 from transformers import AutoModelForCausalLM, AutoConfig, AutoTokenizer
 from torch.utils.data import Dataset
@@ -13,6 +14,74 @@ from peft import get_peft_model, LoraConfig, TaskType
 # Import modules from the refactored code (ZO_all_code)
 from arguments import ZOTrainingArguments
 from trainer import get_trainer_class
+
+# =============================================================================
+# 1. Profiled Step Functions
+# =============================================================================
+
+def profiled_mezo_step(self, model, inputs, num_items_in_batch=None):
+    """
+    MeZO training step with detailed timing profiling.
+    Replaces trainer.training_step
+    """
+    stats = {"perturb": 0.0, "forward": 0.0, "update": 0.0}
+    
+    # 1. Sample Seed
+    self.zo_random_seed = np.random.randint(1000000000)
+    
+    # === Perturb (+) ===
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    self._perturb_mezo(scaling_factor=1)
+    torch.cuda.synchronize()
+    stats["perturb"] += time.perf_counter() - t0
+    
+    # === Forward (+) ===
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    loss1 = self.zo_forward(model, inputs)
+    torch.cuda.synchronize()
+    stats["forward"] += time.perf_counter() - t0
+    
+    # === Perturb (-) ===
+    # From +1 to -1 requires -2 step
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    self._perturb_mezo(scaling_factor=-2)
+    torch.cuda.synchronize()
+    stats["perturb"] += time.perf_counter() - t0
+    
+    # === Forward (-) ===
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    loss2 = self.zo_forward(model, inputs)
+    torch.cuda.synchronize()
+    stats["forward"] += time.perf_counter() - t0
+    
+    # Calculate Projected Gradient Estimate
+    self.projected_grad = (loss1 - loss2) / (2 * self.args.zo_eps)
+    
+    # === Restore Parameters ===
+    # From -1 back to 0 requires +1
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    self._perturb_mezo(scaling_factor=1)
+    torch.cuda.synchronize()
+    stats["perturb"] += time.perf_counter() - t0
+    
+    # === Update Parameters ===
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    self._update_mezo()
+    torch.cuda.synchronize()
+    stats["update"] += time.perf_counter() - t0
+    
+    # Save stats of this step to the trainer instance for external access
+    self._last_step_stats = stats
+    return loss1
+
+# If LoZO or other methods are needed, add similar functions following the logic above
+# Example: profiled_lozo_step ...
 
 # =============================================================================
 # Mocking Data
@@ -24,7 +93,6 @@ class DummyDataset(Dataset):
     def __len__(self):
         return self.length
     def __getitem__(self, i):
-        # Trainer handles batching internally; return empty dict here
         return {} 
 
 # =============================================================================
@@ -34,205 +102,160 @@ class DummyDataset(Dataset):
 def main_test(
         batch_size: int = 16,
         sequence_length: int = 256,
-        method: str = "mezo",  # Options: mezo, zoadamu, lozo, hizoo, adalezo, pzo, fzoo
-        peft_mode: str = "none", # Options: none, lora, prefix
+        method: str = "mezo", 
+        peft_mode: str = "none", 
         steps: int = 10,
         load_float16: bool = True,
-        model_path: str = "facebook/opt-1.3b" # Or use a dummy path to trigger dummy model creation
+        model_path: str = "facebook/opt-1.3b"
 ):
     print(f"\n{'='*25} Benchmark Config {'='*25}")
     print(f"Method:     {method.upper()}")
     print(f"PEFT Mode:  {peft_mode.upper()}")
     print(f"Batch Size: {batch_size}")
-    print(f"Seq Length: {sequence_length}")
     print(f"Steps:      {steps}")
 
-    # 1. Construct Training Arguments
-    # Set arguments based on method and peft_mode to ensure Trainer initializes internal state correctly
+    # 1. Args Setup
     args = ZOTrainingArguments(
         output_dir="./tmp_bench",
         per_device_train_batch_size=batch_size,
         trainer=method,
         use_cpu=False,
-        logging_steps=100, # Reduce logging overhead
-        # General ZO parameters
         zo_eps=1e-3,
         learning_rate=1e-6,
-        # Method-specific parameters (Default values from ZO_all_code)
-        zo_adamu_beta1=0.9,
-        zo_adamu_beta2=0.999,
-        lozo_rank=8,
-        lozo_step_interval=100,
-        hessian_smooth="constant1e-4", # Hizoo
-        sliding_window_length=14, # PseuZO
-        momentum_fb_max=1.0,      # PseuZO
-        fzoo_n=4,                 # FZOO
-        adalezo_k_ratio=0.1,      # AdaLeZO
+        # Method specifics
+        zo_adamu_beta1=0.9, zo_adamu_beta2=0.999,
+        lozo_rank=8, lozo_step_interval=100,
+        hessian_smooth="constant1e-4", 
+        sliding_window_length=14, momentum_fb_max=1.0,
+        fzoo_n=4, adalezo_k_ratio=0.1,
     )
 
-    # Set flags for PEFT args to ensure compatibility with Trainer logic
     if peft_mode == "lora":
-        args.lora = True
-        args.lora_r = 8
-        args.lora_alpha = 16
+        args.lora = True; args.lora_r = 8; args.lora_alpha = 16
     elif peft_mode == "prefix":
-        args.prefix_tuning = True
-        args.num_prefix = 5
-        args.prefix_init_by_real_act = False # Disable for dummy model stability
-        args.reparam = False # ZO usually doesn't use reparam
+        args.prefix_tuning = True; args.num_prefix = 5
+        args.prefix_init_by_real_act = False; args.reparam = False
 
-    # 2. Load Model (Use Dummy or Real)
+    # 2. Load Model
     try:
         print(f"Loading model: {model_path}...")
-        model = AutoModelForCausalLM.from_pretrained(
-            model_path, 
-            device_map="auto", 
-            torch_dtype=torch.float16 if load_float16 else torch.float32
-        )
+        model = AutoModelForCausalLM.from_pretrained(model_path, device_map="auto", torch_dtype=torch.float16 if load_float16 else torch.float32)
     except Exception as e:
-        print(f"Warning: Could not load {model_path} ({e}). Creating Dummy OPT-1.3B.")
+        print(f"Warning: Could not load {model_path}. Creating Dummy OPT-1.3B.")
         config = AutoConfig.from_pretrained("facebook/opt-1.3b")
-        # Ensure parameter count is realistic for memory testing
         model = AutoModelForCausalLM.from_config(config)
         if load_float16: model = model.half()
         model = model.cuda()
 
-    model.eval() # ZO usually runs in eval mode (except PseuZO, handled by Trainer)
+    model.eval()
 
-    # 3. Apply PEFT (LoRA or Prefix)
+    # 3. PEFT Injection
     if peft_mode == "lora":
-        print("Injecting LoRA via PEFT library...")
-        peft_config = LoraConfig(
-            task_type=TaskType.CAUSAL_LM,
-            inference_mode=False,
-            r=args.lora_r,
-            lora_alpha=args.lora_alpha,
-            lora_dropout=0.0,
-            # target_modules default to query/value for OPT/Llama usually
-        )
+        peft_config = LoraConfig(task_type=TaskType.CAUSAL_LM, inference_mode=False, r=args.lora_r, lora_alpha=args.lora_alpha, lora_dropout=0.0)
         model = get_peft_model(model, peft_config)
-        model.print_trainable_parameters()
-    
     elif peft_mode == "prefix":
-        print("Injecting Prefix Tuning via Custom MeZO Implementation...")
-        # Importing from the local refactored structure
         from tuners.prefix import PrefixTuning 
-        PrefixTuning(
-            model, 
-            num_prefix=args.num_prefix, 
-            reparam=args.reparam, 
-            float16=load_float16, 
-            init_by_real_act=args.prefix_init_by_real_act
-        )
-        # Log trainable parameters manually for Prefix
-        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-        all_params = sum(p.numel() for p in model.parameters())
-        print(f"trainable params: {trainable_params} || all params: {all_params} || trainable%: {100 * trainable_params / all_params:.4f}")
+        PrefixTuning(model, num_prefix=args.num_prefix, reparam=args.reparam, float16=load_float16, init_by_real_act=args.prefix_init_by_real_act)
 
     # 4. Initialize Trainer
-    # We need a dummy tokenizer and collator to satisfy Trainer initialization checks
     tokenizer = AutoTokenizer.from_pretrained(model_path) 
     tokenizer.pad_token = tokenizer.eos_token
-    
-    # Get corresponding Trainer class
     TrainerClass = get_trainer_class(args)
-    print(f"Initializing {TrainerClass.__name__}...")
-
+    
     trainer = TrainerClass(
-        model=model,
-        args=args,
-        train_dataset=DummyDataset(length=100), # Dummy dataset
-        tokenizer=tokenizer,
-        data_collator=lambda x: x # Dummy collator
+        model=model, args=args,
+        train_dataset=DummyDataset(length=100), tokenizer=tokenizer, data_collator=lambda x: x
     )
 
-    # Manually attach forward wrappers if needed (usually handled in run.py)
-    # This is crucial for PseuZO/FZOO to work correctly
-    if not hasattr(model, 'original_forward'):
-        model.original_forward = model.forward
-    
-    if method == "pzo":
-        from trainer.utils import forward_wrap_with_option_len_pzo
-        model.forward = forward_wrap_with_option_len_pzo.__get__(model, type(model))
-    elif method == "fzoo":
-        from trainer.utils import forward_wrap_with_option_len_fzoo
-        model.forward = forward_wrap_with_option_len_fzoo.__get__(model, type(model))
-    else:
-        # MeZO, LoZO, HiZOO, AdaLeZO use the standard ZO wrapper
-        from trainer.utils import forward_wrap_with_option_len
-        model.forward = forward_wrap_with_option_len.__get__(model, type(model))
+    # [FIX] Manually initialize optimizer/scheduler to avoid 'NoneType' error
+    trainer.create_optimizer()
+    trainer.create_scheduler(num_training_steps=steps)
 
-    # 5. Construct Input Data
-    # Construct tensor dict directly to bypass DataLoader overhead and focus on step performance
+    # [FIX] Monkey Patch: Inject the profiled training_step
+    if method == "mezo":
+        print("Injecting Profiled MeZO Step...")
+        trainer.training_step = types.MethodType(profiled_mezo_step, trainer)
+    else:
+        print(f"Warning: Profiled step not implemented for {method}. Using default (no detailed breakdown).")
+        # If needed, implement similar profiled_xxx_step for lozo, zo_adamu, etc. here
+
+    # Forward wrappers setup
+    if not hasattr(model, 'original_forward'): model.original_forward = model.forward
+    from trainer.utils import forward_wrap_with_option_len
+    model.forward = forward_wrap_with_option_len.__get__(model, type(model))
+
+    # 5. Inputs
     dummy_inputs = {
         "input_ids": torch.randint(100, 1000, (batch_size, sequence_length), device=model.device),
         "attention_mask": torch.ones((batch_size, sequence_length), device=model.device),
-        "labels": torch.randint(100, 1000, (batch_size, sequence_length), device=model.device) 
+        "labels": torch.randint(100, 1000, (batch_size, sequence_length), device=model.device),
+        "option_len": torch.tensor([10] * batch_size, device=model.device)
     }
-    # Add option_len (Required by ZO forward wrappers)
-    # Assuming the last 10 tokens are the "option" (candidate) part
-    dummy_inputs["option_len"] = torch.tensor([10] * batch_size, device=model.device)
 
     # --- Start Benchmark ---
-
-    # Measure Initial Static Memory
     torch.cuda.empty_cache()
     torch.cuda.synchronize()
     static_mem_gb = sum([torch.cuda.memory_allocated(i) for i in range(torch.cuda.device_count())]) / 1024**3
-    print(f"Static Memory (Model + Adapter): {static_mem_gb:.4f} GB")
+    print(f"Static Memory: {static_mem_gb:.4f} GB")
 
-    print(f"\n{'-'*85}")
-    print(f"{'Step':<5} | {'Step Time (s)':<15} | {'Peak Mem (GB)':<15} | {'Overhead (MB)':<15}")
-    print(f"{'-'*85}")
+    # Accumulators
+    stats_acc = {"perturb": [], "forward": [], "update": [], "peak_mem": [], "overhead": []}
 
-    latencies = []
-    peak_mems = []
-    overheads = []
+    print(f"\n{'-'*105}")
+    print(f"{'Step':<5} | {'Loss':<10} | {'Perturb(s)':<12} | {'Forward(s)':<12} | {'Update(s)':<12} | {'Peak(GB)':<10} | {'Overhead(MB)':<12}")
+    print(f"{'-'*105}")
 
-    # Warmup Step
-    print("Warmup step...")
+    # Warmup
     try:
         trainer.training_step(model, dummy_inputs)
     except Exception as e:
         print(f"Error in warmup: {e}")
-        # Ensure dummy_inputs structure matches what the model expects
         return
 
-    # Measurement Loop
     for i in range(steps):
         # Reset memory stats
         torch.cuda.empty_cache()
         for d in range(torch.cuda.device_count()): torch.cuda.reset_peak_memory_stats(d)
         
         torch.cuda.synchronize()
-        t0 = time.perf_counter()
         
-        # === Core Call ===
-        # Directly call Trainer.training_step
-        # This includes: Perturb -> Forward -> Update (and any internal hook overhead)
+        # === Run Step ===
         loss = trainer.training_step(model, dummy_inputs)
-        # =================
+        # ================
         
         torch.cuda.synchronize()
-        t_step = time.perf_counter() - t0
         
+        # Get Time Stats (Fallback to 0 if not profiled)
+        current_stats = getattr(trainer, "_last_step_stats", {"perturb": 0, "forward": 0, "update": 0})
+        
+        # Get Memory Stats
         peak_bytes = sum([torch.cuda.max_memory_allocated(d) for d in range(torch.cuda.device_count())])
         peak_gb = peak_bytes / 1024**3
         overhead_mb = (peak_gb - static_mem_gb) * 1024
 
-        latencies.append(t_step)
-        peak_mems.append(peak_gb)
-        overheads.append(overhead_mb)
+        # Print Row
+        print(f"{i+1:<5} | {loss.item():<10.4f} | {current_stats['perturb']:<12.5f} | {current_stats['forward']:<12.5f} | {current_stats['update']:<12.5f} | {peak_gb:<10.4f} | {overhead_mb:<12.2f}")
 
-        print(f"{i+1:<5} | {t_step:<15.5f} | {peak_gb:<15.4f} | {overhead_mb:<15.2f}")
+        # Accumulate
+        stats_acc["perturb"].append(current_stats['perturb'])
+        stats_acc["forward"].append(current_stats['forward'])
+        stats_acc["update"].append(current_stats['update'])
+        stats_acc["peak_mem"].append(peak_gb)
+        stats_acc["overhead"].append(overhead_mb)
 
     # Summary
-    print(f"{'='*85}")
-    print(f"AVERAGE ({method.upper()} + {peft_mode.upper()})")
-    print(f"Step Time : {np.mean(latencies):.5f} s")
-    print(f"Peak Mem  : {np.mean(peak_mems):.4f} GB")
-    print(f"Overhead  : {np.mean(overheads):.2f} MB")
-    print(f"{'='*85}")
+    print(f"{'='*105}")
+    print(f"AVERAGE STATISTICS ({method.upper()} + {peft_mode.upper()})")
+    print(f"{'='*105}")
+    print(f"Avg Perturb Time : {np.mean(stats_acc['perturb']):.5f} s")
+    print(f"Avg Forward Time : {np.mean(stats_acc['forward']):.5f} s")
+    print(f"Avg Update Time  : {np.mean(stats_acc['update']):.5f} s")
+    print(f"{'-'*105}")
+    total_time = np.mean(stats_acc['perturb']) + np.mean(stats_acc['forward']) + np.mean(stats_acc['update'])
+    print(f"TOTAL STEP TIME  : {total_time:.5f} s")
+    print(f"AVG PEAK MEMORY  : {np.mean(stats_acc['peak_mem']):.4f} GB")
+    print(f"AVG OVERHEAD     : {np.mean(stats_acc['overhead']):.2f} MB")
+    print(f"{'='*105}")
 
 if __name__ == "__main__":
     Fire(main_test)

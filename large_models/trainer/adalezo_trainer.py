@@ -151,7 +151,7 @@ class AdaLeZOTrainer(BaseZOTrainer):
         if self.state.global_step % self.args.adalezo_interval == 0:
             self._resample_layers()
             # Optional: Log probs
-            # self._log_probs()
+            self._log_probs()
 
         return loss1
 
