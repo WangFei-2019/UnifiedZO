@@ -15,6 +15,7 @@ from .adalozo_trainer import AdaLoZOTrainer
 from .adazoadamu_trainer import AdaZOAdaMUTrainer
 from .adahizoo_trainer import AdaHiZOOTrainer
 from .adapzo_trainer import AdaPZOTrainer
+from .adafzoo_trainer import AdaFZooTrainer
 
 def get_trainer_class(args):
     """
@@ -44,6 +45,8 @@ def get_trainer_class(args):
         return AdaHiZOOTrainer
     elif args.trainer == "adapzo":
         return AdaPZOTrainer
+    elif args.trainer == "adafzoo":
+        return AdaFZooTrainer
     else:
         # Fallback to base or standard Trainer if "regular"
         return BaseZOTrainer

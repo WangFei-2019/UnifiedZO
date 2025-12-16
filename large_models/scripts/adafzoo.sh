@@ -12,11 +12,14 @@ STEPS=${STEPS:-20000}
 EVAL_STEPS=${EVAL_STEPS:-2000}
 
 # --- AdaLeZO Params ---
-ADA_KRATIO=${ADA_KRATIO:-0.1}   # Ratio of layers to select (e.g., 0.1 for 10%)
-ADA_TAU=${ADA_TAU:-0.1}         # Temperature for Softmax/Gumbel
-ADA_C=${ADA_C:-0.7}             # Exploration constant
-ADA_CLIP=${ADA_CLIP:-10}        # IPW clipping threshold
-ADA_MOMENTUM=${ADA_MOMENTUM:-False} # Whether to use momentum for layer selection
+ADA_KRATIO=${ADA_KRATIO:-0.1}
+ADA_TAU=${ADA_TAU:-0.1}
+ADA_C=${ADA_C:-0.7}
+ADA_CLIP=${ADA_CLIP:-10}
+ADA_MOMENTUM=${ADA_MOMENTUM:-False}
+
+# --- FZOO Params ---
+FZOO_N=${FZOO_N:-8} # Default sample size for FZOO variance reduction
 
 if [ "$MODE" == "lora" ]; then
     LR=${LR:-5e-5}
@@ -32,7 +35,8 @@ else
     PEFT_ARGS=""
 fi
 
-TAG=adalezo-$MODE-$STEPS-$BS-$LR-$EPS-k${ADA_KRATIO}-t${ADA_TAU}-c${ADA_C}-clip${ADA_CLIP}-$SEED
+# Tag combines both AdaLeZO Ratio (k) and FZOO Samples (n)
+TAG=adafzoo-$MODE-$STEPS-$BS-$LR-$EPS-k${ADA_KRATIO}-n${FZOO_N}-$SEED
 TASK_ARGS=""
 GRAD_ACCUM_STEPS=1
 
@@ -44,15 +48,15 @@ case $TASK in
     SQuAD) TASK_ARGS="--train_as_classification False" ;;
 esac
 
-echo "Running AdaLeZO | Mode: $MODE | LR: $LR | Model: $MODEL | Task: $TASK"
+echo "Running AdaFZoo | Mode: $MODE | LR: $LR | Model: $MODEL | Task: $TASK"
 
 python run.py \
     --model_name $MODEL \
     --task_name $TASK \
-    --output_dir result-adalezo/$TASK-${MODEL_NAME}-$TAG --tag $TAG \
+    --output_dir result-adafzoo/$TASK-${MODEL_NAME}-$TAG --tag $TAG \
     --train_set_seed $SEED --logging_steps 10 --max_steps $STEPS \
     --num_train $TRAIN --num_dev $DEV --num_eval $EVAL \
-    --trainer adalezo \
+    --trainer adafzoo \
     --learning_rate $LR --zo_eps $EPS --per_device_train_batch_size $BS \
     --lr_scheduler_type "constant" \
     --load_best_model_at_end --eval_strategy steps --save_strategy steps --save_total_limit 1 \
@@ -65,6 +69,8 @@ python run.py \
     --adalezo_c $ADA_C \
     --adalezo_ipw_clip $ADA_CLIP \
     --adalezo_layer_momentum $ADA_MOMENTUM \
+    \
+    --fzoo_n $FZOO_N \
     \
     $PEFT_ARGS \
     $TASK_ARGS \

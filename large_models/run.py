@@ -252,7 +252,7 @@ def main():
                     else:
                         from trainer.utils import  forward_wrap_with_option_len_pzo
                         model.forward = forward_wrap_with_option_len_pzo.__get__(model, type(model))
-                elif args.trainer == "fzoo":
+                elif args.trainer == "fzoo" or args.trainer == "adafzoo":
                     from trainer.utils import forward_wrap_with_option_len_fzoo
                     model.forward = forward_wrap_with_option_len_fzoo.__get__(model, type(model))
                 else:
