@@ -63,7 +63,7 @@ echo "Extra args: $EXTRA_ARGS $TASK_ARGS"
 python run.py \
     --model_name $MODEL \
     --task_name $TASK \
-    --output_dir result_${MODE}/$TASK-${MODEL_NAME}-$TAG --tag $TAG \
+    --output_dir result-${MODE}/$TASK-${MODEL_NAME}-$TAG --tag $TAG \
     --train_set_seed $SEED --num_train $TRAIN --num_dev $DEV --num_eval $EVAL --logging_steps 10 \
     --trainer regular \
     --learning_rate $LR --num_train_epochs $EPOCH --per_device_train_batch_size $BS \
