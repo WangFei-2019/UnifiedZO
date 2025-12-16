@@ -6,7 +6,7 @@ import torch
 import time
 import numpy as np
 from fire import Fire
-from transformers import AutoModelForCausalLM, AutoConfig, PreTrainedTokenizerFast
+from transformers import AutoModelForCausalLM, AutoConfig, AutoTokenizer
 from torch.utils.data import Dataset
 from peft import get_peft_model, LoraConfig, TaskType
 
@@ -116,7 +116,7 @@ def main_test(
     elif peft_mode == "prefix":
         print("Injecting Prefix Tuning via Custom MeZO Implementation...")
         # Importing from the local refactored structure
-        from large_models.tuners.prefix import PrefixTuning 
+        from tuners.prefix import PrefixTuning 
         PrefixTuning(
             model, 
             num_prefix=args.num_prefix, 
@@ -131,7 +131,7 @@ def main_test(
 
     # 4. Initialize Trainer
     # We need a dummy tokenizer and collator to satisfy Trainer initialization checks
-    tokenizer = PreTrainedTokenizerFast.from_pretrained("gpt2") 
+    tokenizer = AutoTokenizer.from_pretrained(model_path) 
     tokenizer.pad_token = tokenizer.eos_token
     
     # Get corresponding Trainer class
@@ -148,15 +148,18 @@ def main_test(
 
     # Manually attach forward wrappers if needed (usually handled in run.py)
     # This is crucial for PseuZO/FZOO to work correctly
+    if not hasattr(model, 'original_forward'):
+        model.original_forward = model.forward
+    
     if method == "pzo":
-        from large_models.trainer.utils import forward_wrap_with_option_len_pzo
+        from trainer.utils import forward_wrap_with_option_len_pzo
         model.forward = forward_wrap_with_option_len_pzo.__get__(model, type(model))
     elif method == "fzoo":
-        from large_models.trainer.utils import forward_wrap_with_option_len_fzoo
+        from trainer.utils import forward_wrap_with_option_len_fzoo
         model.forward = forward_wrap_with_option_len_fzoo.__get__(model, type(model))
     else:
         # MeZO, LoZO, HiZOO, AdaLeZO use the standard ZO wrapper
-        from large_models.trainer.utils import forward_wrap_with_option_len
+        from trainer.utils import forward_wrap_with_option_len
         model.forward = forward_wrap_with_option_len.__get__(model, type(model))
 
     # 5. Construct Input Data
@@ -168,7 +171,7 @@ def main_test(
     }
     # Add option_len (Required by ZO forward wrappers)
     # Assuming the last 10 tokens are the "option" (candidate) part
-    dummy_inputs["option_len"] = [10] * batch_size 
+    dummy_inputs["option_len"] = torch.tensor([10] * batch_size, device=model.device)
 
     # --- Start Benchmark ---
 

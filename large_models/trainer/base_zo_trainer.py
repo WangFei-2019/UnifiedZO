@@ -2,7 +2,6 @@ import torch
 import numpy as np
 from transformers import Trainer
 from transformers.utils import logging
-from .schedulers import zo_lr_scheduler
 from metrics import f1
 logger = logging.get_logger(__name__)
 
