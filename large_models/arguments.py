@@ -162,7 +162,8 @@ class ZOTrainingArguments(TrainingArguments):
     # Linear Probing options
     linear_probing: bool = field(default=False, metadata={"help": "Use linear probing."})
     lp_early_stopping: bool = field(default=False, metadata={"help": "Early stopping for linear probing."})
-
+    
+    # Head Tuning options
     head_tuning: bool = field(default=False, metadata={"help": "Tune only the LM head."})
     untie_emb: bool = field(default=False, metadata={"help": "Untie embeddings and LM head."})
 

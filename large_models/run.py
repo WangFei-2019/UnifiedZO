@@ -164,7 +164,7 @@ def main():
     #     model.print_trainable_parameters()
     elif args.prefix_tuning:
         logger.info("Injecting Prefix Tuning via Custom MeZO Implementation...")
-        from tuners.prefix import PrefixTuning 
+        from tuners import PrefixTuning 
         PrefixTuning(
             model, 
             num_prefix=args.num_prefix, 
@@ -210,6 +210,11 @@ def main():
         )
         model = get_peft_model(model, peft_config)
         model.print_trainable_parameters()
+    
+    elif args.head_tuning:
+        logger.info("Injecting Head Tuning via Custom Implementation...")
+        from tuners import HeadTuning
+        HeadTuning(model, args)
 
     # 5. Training Loop / Evaluation Loop
     # Handles cases where we might have multiple training sets (few-shot variance)
@@ -290,11 +295,14 @@ def main():
 
                 # Linear Probing Branch
                 if args.linear_probing:
-                    # Run Linear Probing INSTEAD of ZO Training
                     from tuners import perform_linear_probing
+                    # Call independent module, skipping standard trainer.train()
                     perform_linear_probing(args, model, tokenizer, train_dataset, collator)
-                    
                     logger.info("Linear Probing complete. Skipping standard ZO training loop.")
+                    
+                    # Save model (LP modifies LM Head weights, so saving is necessary)
+                        # if args.save_model:
+                        #      trainer.save_model()
                 else:
                     # Standard ZO/Fine-tuning Training
                     train_result = trainer.train()
