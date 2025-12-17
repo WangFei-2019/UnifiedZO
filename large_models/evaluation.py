@@ -31,9 +31,12 @@ class Evaluator:
         input_ids = torch.tensor([input_ids]).to(self.model.device)
 
         if generation:
+            attention_mask = torch.ones_like(input_ids)
             # Autoregressive generation (e.g., for SQuAD, DROP)
             outputs = self.model.generate(
                 input_ids, 
+                attention_mask=attention_mask, 
+                pad_token_id=self.tokenizer.pad_token_id, 
                 do_sample=self.args.sampling, 
                 temperature=self.args.temperature, 
                 num_beams=self.args.num_beams, 

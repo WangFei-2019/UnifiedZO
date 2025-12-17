@@ -58,7 +58,7 @@ case $TASK in
         ;;
 esac
 
-echo "Running MeZO | Mode: $MODE | LR: $LR | Model: $MODEL | Task: $TASK"
+echo "Running MeZO | Mode: $MODE | LR: $LR | EPS: $EPS | Model: $MODEL | Task: $TASK"
 
 python run.py \
     --model_name $MODEL \
