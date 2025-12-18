@@ -38,7 +38,7 @@ class HiZOOTrainer(BaseZOTrainer):
         # Update Hessian Estimation
         self._update_hizoo_hessian(loss_orig, loss1, loss2)
         
-        self.projected_grad = (loss1 - loss2) / (2 * self.args.zo_eps)
+        self.projected_grad = ((loss1 - loss2) / (2 * self.args.zo_eps)).item()
         
         self._update_hizoo()
         

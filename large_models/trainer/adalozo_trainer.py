@@ -71,7 +71,7 @@ class AdaLoZOTrainer(AdaLeZOTrainer):
         """
         args = self.args
         lr = self._get_learning_rate()
-        step_reward = abs(self.projected_grad.item())
+        step_reward = abs(self.projected_grad)
 
         # Iterate only over active layers
         for layer_key in self.current_active_layers:

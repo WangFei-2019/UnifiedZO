@@ -30,7 +30,7 @@ class MeZOTrainer(BaseZOTrainer):
         loss2 = self.zo_forward(model, inputs)
         
         # 4. Calculate Projected Gradient Estimate
-        self.projected_grad = (loss1 - loss2) / (2 * self.args.zo_eps)
+        self.projected_grad = ((loss1 - loss2) / (2 * self.args.zo_eps)).item()
         
         # Restore parameters to original state (from -1 to 0 requires +1)
         self._perturb_mezo(scaling_factor=1)
@@ -59,5 +59,5 @@ class MeZOTrainer(BaseZOTrainer):
             # Apply weight decay
             if self.args.weight_decay > 0 and "bias" not in name and "layer_norm" not in name and "layernorm" not in name:
                 update += self.args.weight_decay * param.data
-                
+
             param.data -= lr * update

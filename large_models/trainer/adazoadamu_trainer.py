@@ -50,7 +50,7 @@ class AdaZOAdaMUTrainer(AdaLeZOTrainer):
         bias_correction2 = 1 - beta2 ** step
         
         # Bandit Reward Signal (Magnitude of projected gradient)
-        step_reward = abs(self.projected_grad.item())
+        step_reward = abs(self.projected_grad)
 
         # Iterate ONLY over active layers (Sparse Update)
         for layer_key in self.current_active_layers:

@@ -15,3 +15,8 @@ MODEL=facebook/opt-1.3b TASK=SST2 MODE=prefix LR=1e-2 bash finetune.sh
 
 # MeZO
 CUDA_VISIBLE_DEVICES=0 MODEL=facebook/opt-6.7b TASK=SST2 MODE=ft LR=1e-7 EPS=1e-3 bash scripts/mezo.sh
+
+
+
+# run for Qwen-2.5-1.5b
+CUDA_VISIBLE_DEVICES=0 MODEL=/workspace/wangfei154/models/Qwen/Qwen2.5-1.5B TASK=SST2 LR=1e-6 EPS=1e-5 STEPS=5000 EVAL_STEPS=500 bash scripts/mezo.sh 

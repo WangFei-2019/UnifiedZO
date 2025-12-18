@@ -53,7 +53,7 @@ class ZOAdaMUTrainer(BaseZOTrainer):
         
         # 4. Calculate Projected Gradient Estimate (Scalar)
         # projected_grad approx directional derivative along z
-        self.projected_grad = (loss1 - loss2) / (2 * self.args.zo_eps)
+        self.projected_grad = ((loss1 - loss2) / (2 * self.args.zo_eps)).item()
         
         # Restore parameters to original state (+1 from current state of -1 -> 0)
         self._perturb_parameters(scaling_factor=1)

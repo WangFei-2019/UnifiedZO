@@ -139,7 +139,7 @@ class AdaLeZOTrainer(BaseZOTrainer):
         loss2 = self.zo_forward(model, inputs)
         
         # 4. Calculate Projected Gradient Estimate (Scalar proxy)
-        self.projected_grad = (loss1 - loss2) / (2 * self.args.zo_eps)
+        self.projected_grad = ((loss1 - loss2) / (2 * self.args.zo_eps)).item()
         
         # Restore Active Layers to original state (add 1)
         self._perturb_active_layers(scaling_factor=1)
@@ -180,7 +180,7 @@ class AdaLeZOTrainer(BaseZOTrainer):
         lr = self._get_learning_rate()
         
         # Reward signal: Magnitude of the projected gradient
-        step_reward = abs(self.projected_grad.item())
+        step_reward = abs(self.projected_grad)
 
         # Iterate only over active layers for update
         for layer_key in self.current_active_layers:

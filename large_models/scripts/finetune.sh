@@ -64,9 +64,9 @@ python run.py \
     --model_name $MODEL \
     --task_name $TASK \
     --output_dir result-${MODE}/$TASK-${MODEL_NAME}-$TAG --tag $TAG \
-    --train_set_seed $SEED --num_train $TRAIN --num_dev $DEV --num_eval $EVAL --logging_steps 10 \
-    --trainer regular \
-    --learning_rate $LR --num_train_epochs $EPOCH --per_device_train_batch_size $BS \
+    --train_set_seed $SEED --num_train $TRAIN --num_dev $DEV --num_eval $EVAL --logging_steps 1 \
+    --trainer regular --fp16 \
+    --learning_rate $LR --num_train_epochs $EPOCH --per_device_train_batch_size $BS --per_device_eval_batch_size $BS \
     --load_best_model_at_end --eval_strategy epoch --save_strategy epoch --save_total_limit 1 \
     --train_as_classification \
     $EXTRA_ARGS \

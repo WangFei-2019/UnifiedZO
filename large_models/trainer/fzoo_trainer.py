@@ -114,7 +114,7 @@ class FZooTrainer(BaseZOTrainer):
             # Fallback to avoid division by zero if all losses are identical
             std = 1.0
              
-        self.projected_grad = (loss1s - loss_tensor_cpu) / (perturbTimes * std)
+        self.projected_grad = ((loss1s - loss_tensor_cpu) / (perturbTimes * std)).item()
         # self.projected_grad = (loss1s - loss_tensor_cpu) / (perturbTimes * self.args.zo_eps) # Unlike the original LOZO code, which is biased, here we change to remove the bias. 
 
         # Logging as per reference

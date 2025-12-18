@@ -54,7 +54,7 @@ class AdaHiZOOTrainer(AdaLeZOTrainer):
         self._update_hizoo_hessian(loss_orig, loss1, loss2)
         
         # 5. Projected Gradient
-        self.projected_grad = (loss1 - loss2) / (2 * self.args.zo_eps)
+        self.projected_grad = ((loss1 - loss2) / (2 * self.args.zo_eps)).item()
         
         # 6. Update Parameters (IPW + Hessian scaling)
         self._update_adalezo()
@@ -114,7 +114,7 @@ class AdaHiZOOTrainer(AdaLeZOTrainer):
         """
         args = self.args
         lr = self._get_learning_rate()
-        step_reward = abs(self.projected_grad.item())
+        step_reward = abs(self.projected_grad)
 
         for layer_key in self.current_active_layers:
             prob = self.current_layer_probs_map[layer_key]

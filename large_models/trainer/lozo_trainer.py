@@ -33,7 +33,7 @@ class LoZOTrainer(BaseZOTrainer):
         
         self._perturb_lozo(scaling_factor=1) # Restore
         
-        self.projected_grad = (loss1 - loss2) / (2 * self.args.zo_eps)
+        self.projected_grad = ((loss1 - loss2) / (2 * self.args.zo_eps)).item()
         
         self._update_lozo()
 

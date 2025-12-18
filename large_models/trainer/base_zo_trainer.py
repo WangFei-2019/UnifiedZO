@@ -1,3 +1,4 @@
+from typing import Optional
 import torch
 import numpy as np
 from transformers import Trainer
@@ -128,3 +129,22 @@ class BaseZOTrainer(Trainer):
         self.log(log_data)
         
         return metrics
+
+    def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
+        """
+        Override log to inject projected_grad into logs.
+        """
+        # Log projected_grad if available
+        if hasattr(self, "projected_grad") and self.projected_grad is not None:
+            val = self.projected_grad
+            
+            # Convert tensor to float
+            if isinstance(val, torch.Tensor):
+                if val.numel() > 1:
+                    val = val.mean().item() # 或者选择不记录该向量
+                else:
+                    val = val.item()
+                
+            logs["projected_grad"] = val
+            
+        super().log(logs, start_time)
