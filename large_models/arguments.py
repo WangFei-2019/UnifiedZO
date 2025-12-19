@@ -10,14 +10,8 @@ class ZOTrainingArguments(TrainingArguments):
     """
 
     # --- Task and Model Arguments ---
-    task_name: str = field(
-        default="SST2", 
-        metadata={"help": "Task name (e.g., SST2, BoolQ, SQuAD). Must match class names in tasks/tasks.py"}
-    )
-    model_name: str = field(
-        default="facebook/opt-125m",
-        metadata={"help": "Path to pretrained model or model identifier from huggingface.co/models"}
-    )
+    task_name: str = field(default="SST2", metadata={"help": "Task name (e.g., SST2, BoolQ, SQuAD). Must match class names in tasks/tasks.py"})
+    model_name: str = field(default="facebook/opt-125m",metadata={"help": "Path to pretrained model or model identifier from huggingface.co/models"})
     load_float16: bool = field(default=False, metadata={"help": "Load model in fp16."})
     load_bfloat16: bool = field(default=False, metadata={"help": "Load model in bf16."})
     load_int8: bool = field(default=False, metadata={"help": "Load model in int8 (8-bit quantization)."})
@@ -42,10 +36,7 @@ class ZOTrainingArguments(TrainingArguments):
     template_ver: int = field(default=0, metadata={"help": "template. For some tasks (SST2, RTE, Copa), we add template ver=1 as the empty template."})
 
     # --- ZO Specific Arguments ---
-    trainer: str = field(
-        default="none", 
-        metadata={"help": "The ZO method to use: 'mezo', 'zoadamu', 'lozo', 'hizoo', 'pzo' (pseuZO), 'fzoo'. The FO method to use: 'regular'. ICL method to use: 'none'"}
-    )
+    trainer: str = field(default="none", metadata={"help": "The ZO method to use: 'mezo', 'zoadamu', 'lozo', 'hizoo', 'pzo' (pseuZO), 'fzoo', 'dizo', 'mezo_svrg'. The FO method to use: 'regular'. ICL method to use: 'none'"})
     zo_eps: float = field(default=1e-3, metadata={"help": "Epsilon value for perturbation scale."})
 
     # --- ZO-AdaMU Specific Arguments ---
@@ -75,43 +66,28 @@ class ZOTrainingArguments(TrainingArguments):
     fzoo_thre: int = field(default=0, metadata={"help": "Threshold step for FZOO logic."})
     fzoo_d: int = field(default=1, metadata={"help": "D parameter for FZOO (Strategy selection)."})
 
+    # --- DiZO Specific Arguments ---
+    dizo_interval: int = field( default=100, metadata={"help": "Step interval to perform DiZO projection (regularization)."})
+    dizo_iters: int = field(default=5, metadata={"help": "Number of ZO optimization steps for the constraint parameter (gamma) during projection."})
+    zo_eps_projection: float = field(default=1e-3, metadata={"help": "Epsilon (perturbation scale) used for ZO gradient estimation of the projection constraints."})
+    step_size_projection: float = field(default=0.1, metadata={"help": "Learning rate/Step size for updating the constraint parameters (gamma)."})
+    clip_range: float = field(default=1e-4, metadata={"help": "Clipping range (tau) for the constraint parameters to prevent excessive deviation."})
+    norm_mode: str = field(default="l2", metadata={"help": "Norm type for projection constraints: 'l2' or 'mars' (L1-like)."})
+
+    # --- MeZO-SVRG Specific Arguments ---
+    svrg_q: int = field(default=100, metadata={"help": "Frequency (in steps) to update the SVRG anchor (snapshot) model."})
+    svrg_k: int = field(default=1, metadata={"help": "Number of ZO samples to use when estimating the full gradient (mu) at the anchor point."})
+
     # --- AdaLeZO Specific Arguments ---
-    adalezo_k_ratio: float = field(
-        default=0.1, 
-        metadata={"help": "Ratio of layers to sample per step (e.g., 0.1 means 10% of layers are active)."}
-    )
-    adalezo_tau: float = field(
-        default=0.1, 
-        metadata={"help": "Temperature for Softmax exploration in layer selection."}
-    )
-    adalezo_c: float = field(
-        default=0.7, 
-        metadata={"help": "UCB Exploration Constant. Larger values encourage exploring less selected layers."}
-    )
-    adalezo_ipw_clip: float = field(
-        default=10.0, 
-        metadata={"help": "Maximum clipping value for Inverse Probability Weighting (IPW) to prevent gradient explosion."}
-    )
-    adalezo_layer_momentum: bool = field(
-        default=False, 
-        metadata={"help": "Enable layer-wise adaptive scaling (RMSProp-style variance tracking)."}
-    )
-    adalezo_beta: float = field(
-        default=0.95, 
-        metadata={"help": "Decay factor for the layer-wise adaptive scaling."}
-    )
-    adalezo_warm_start: bool = field(
-        default=False, 
-        metadata={"help": "Warm-start probabilities based on layer depth (bias towards deeper layers initially)."}
-    )
-    adalezo_gamma: float = field(
-        default=0.01, 
-        metadata={"help": "Mixing factor for uniform distribution to ensure non-zero probability."}
-    )
-    adalezo_interval: int = field(
-        default=1, 
-        metadata={"help": "Re-sample active layers every N steps (Stickiness strategy)."}
-    )
+    adalezo_k_ratio: float = field(default=0.1, metadata={"help": "Ratio of layers to sample per step (e.g., 0.1 means 10% of layers are active)."})
+    adalezo_tau: float = field(default=0.1, metadata={"help": "Temperature for Softmax exploration in layer selection."})
+    adalezo_c: float = field(default=0.7, metadata={"help": "UCB Exploration Constant. Larger values encourage exploring less selected layers."})
+    adalezo_ipw_clip: float = field(default=10.0, metadata={"help": "Maximum clipping value for Inverse Probability Weighting (IPW) to prevent gradient explosion."})
+    adalezo_layer_momentum: bool = field(default=False, metadata={"help": "Enable layer-wise adaptive scaling (RMSProp-style variance tracking)."})
+    adalezo_beta: float = field(default=0.95, metadata={"help": "Decay factor for the layer-wise adaptive scaling."})
+    adalezo_warm_start: bool = field(default=False, metadata={"help": "Warm-start probabilities based on layer depth (bias towards deeper layers initially)."})
+    adalezo_gamma: float = field(default=0.01, metadata={"help": "Mixing factor for uniform distribution to ensure non-zero probability."})
+    adalezo_interval: int = field(default=1, metadata={"help": "Re-sample active layers every N steps (Stickiness strategy)."})
 
     # --- Training Strategy ---
     only_train_option: bool = field(default=True, metadata={"help": "If True, only calculates loss on the answer/option part."})
@@ -129,18 +105,9 @@ class ZOTrainingArguments(TrainingArguments):
     lora_alpha: int = field(default=16, metadata={"help": "LoRA alpha."})
 
     # --- Prompt Tuning Arguments ---
-    prompt_tuning: bool = field(
-        default=False, 
-        metadata={"help": "Whether to use Prompt Tuning."}
-    )
-    num_virtual_tokens: int = field(
-        default=10, 
-        metadata={"help": "Number of virtual prompt tokens to prepend."}
-    )
-    prompt_init_by_real_tokens: bool = field(
-        default=False, 
-        metadata={"help": "Whether to initialize prompt tokens using random real word embeddings from the model vocabulary."}
-    )
+    prompt_tuning: bool = field(default=False, metadata={"help": "Whether to use Prompt Tuning."})
+    num_virtual_tokens: int = field(default=10, metadata={"help": "Number of virtual prompt tokens to prepend."})
+    prompt_init_by_real_tokens: bool = field(default=False, metadata={"help": "Whether to initialize prompt tokens using random real word embeddings from the model vocabulary."})
 
     # --- Generation Args ---
     sampling: bool = field(default=False, metadata={"help": "Use sampling for generation."})

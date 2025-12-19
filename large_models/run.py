@@ -36,8 +36,8 @@ from utils import (
     process_dataset, 
     result_file_tag
 )
-# from evaluation import Evaluator
-from evaluation import BatchedEvaluator as Evaluator
+from evaluation import Evaluator
+# from evaluation import BatchedEvaluator as Evaluator
 
 # Setup logging
 logging.basicConfig(
@@ -239,7 +239,11 @@ def main():
             # --- Data Processing ---
             logger.info(f"Processing data for train set {train_set_id}...")
             train_dataset = process_dataset(args, task, train_samples, tokenizer, is_training=True)
-            eval_dataset = process_dataset(args, task, eval_samples, tokenizer, is_training=False)
+            # Set is_training=True to include gold answers in the encoding. 
+            # This ensures 'option_len' is non-zero, allowing the Trainer to calculate a valid 'eval_loss' (perplexity) 
+            # instead of NaN. Note: This only affects the Trainer's loss logging; actual evaluation metrics (e.g., F1, EM) 
+            # are computed independently by the Evaluator and remain unaffected.
+            eval_dataset = process_dataset(args, task, eval_samples, tokenizer, is_training=True)
             
             # --- Model Patching for ZO ---
             # We replace the forward pass to support calculating loss only on the 'option' part.
@@ -368,7 +372,8 @@ def main():
 
         evaluator = Evaluator(args, task, tokenizer, model)
 
-        metrics = evaluator.evaluate(eval_samples=eval_samples, train_samples=train_sets, one_train_set_per_eval_sample=True, verbose_len=3)
+        # metrics = evaluator.evaluate(eval_samples=eval_samples, train_samples=train_sets, one_train_set_per_eval_sample=True, verbose_len=3)
+        metrics = evaluator.evaluate(eval_samples=eval_samples, train_samples=train_sets, one_train_set_per_eval_sample=True)
         if args.local_rank <= 0:
             fname = result_file_tag(args) + "-inference.json"
             output_path = os.path.join(args.output_dir, fname)

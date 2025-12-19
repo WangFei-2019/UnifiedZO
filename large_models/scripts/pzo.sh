@@ -14,7 +14,7 @@ EVAL_STEPS=${EVAL_STEPS:-2000}
 # PZO Specifics
 WINDOW=${WINDOW:-14}
 MOMENTUM_MAX=${MOMENTUM_MAX:-1.0}
-# # In PZO, it is usually necessary to enable gradients for logits or hidden states within the forward wrapper.
+# In PZO, it is usually necessary to enable gradients for logits or hidden states within the forward wrapper.
 PZO_EXTRA_ARGS="--sliding_window_length $WINDOW --momentum_fb_max $MOMENTUM_MAX"
 
 if [ "$MODE" == "lora" ]; then

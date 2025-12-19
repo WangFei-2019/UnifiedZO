@@ -75,8 +75,10 @@ python run.py \
     --load_best_model_at_end --eval_strategy steps --save_strategy steps --save_total_limit 1 \
     --eval_steps $EVAL_STEPS --save_steps $EVAL_STEPS \
     --train_as_classification \
-    --hessian_smooth_type $HESSIAN_SMOOTH \
     --gradient_accumulation_steps $GRAD_ACCUM_STEPS \
+    \
+    --hessian_smooth_type $HESSIAN_SMOOTH \
+    \
     $PEFT_ARGS \
     $TASK_ARGS \
     "$@"

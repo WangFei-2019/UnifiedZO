@@ -12,11 +12,17 @@ STEPS=${STEPS:-20000}
 EVAL_STEPS=${EVAL_STEPS:-2000}
 
 # --- AdaLeZO Params ---
-ADA_KRATIO=${ADA_KRATIO:-0.2}   # Ratio of layers to select (e.g., 0.2 for 20%)
-ADA_TAU=${ADA_TAU:-0.2}         # Temperature for Softmax/Gumbel
-ADA_C=${ADA_C:-0.7}             # Exploration constant
-ADA_CLIP=${ADA_CLIP:-16}        # IPW clipping threshold
-ADA_MOMENTUM=${ADA_MOMENTUM:-False} # Whether to use momentum for layer selection
+ADA_KRATIO=${ADA_KRATIO:-0.1}       # Ratio of layers to select (e.g., 0.1 for 10%)
+ADA_TAU=${ADA_TAU:-0.1}             # Temperature for Softmax/Gumbel distribution in layer selection
+ADA_C=${ADA_C:-0.7}                 # Exploration constant for Bandit (UCB)
+ADA_CLIP=${ADA_CLIP:-10}            # Clipping threshold for Inverse Probability Weighting (IPW)
+
+# --- DiZO Specific Params ---
+DIZO_INTERVAL=${DIZO_INTERVAL:-100}     # Interval steps for projection
+DIZO_ITERS=${DIZO_ITERS:-5}             # Number of ZO optimization steps for Gamma per projection
+ZO_EPS_PROJ=${ZO_EPS_PROJ:-1e-3}
+STEP_SIZE_PROJ=${STEP_SIZE_PROJ:-0.1}
+CLIP_RANGE=${CLIP_RANGE:-1e-4}
 
 if [ "$MODE" == "lora" ]; then
     LR=${LR:-5e-5}
@@ -32,7 +38,7 @@ else
     PEFT_ARGS=""
 fi
 
-TAG=adalezo-$MODE-$STEPS-$BS-$LR-$EPS-k${ADA_KRATIO}-t${ADA_TAU}-c${ADA_C}-clip${ADA_CLIP}-$SEED
+TAG=adadizo-$MODE-$STEPS-$BS-$LR-k${ADA_KRATIO}-int${DIZO_INTERVAL}-$SEED
 TASK_ARGS=""
 GRAD_ACCUM_STEPS=1
 
@@ -44,15 +50,15 @@ case $TASK in
     SQuAD) TASK_ARGS="--train_as_classification False" ;;
 esac
 
-echo "Running AdaLeZO | Mode: $MODE | LR: $LR | Model: $MODEL | Task: $TASK"
+echo "Running AdaDiZO | Mode: $MODE | LR: $LR | K: $ADA_KRATIO | Interval: $DIZO_INTERVAL | Task: $TASK"
 
 python run.py \
     --model_name $MODEL \
     --task_name $TASK \
-    --output_dir result-adalezo/$TASK-${MODEL_NAME}-$TAG --tag $TAG \
+    --output_dir result-adadizo/$TASK-${MODEL_NAME}-$TAG --tag $TAG \
     --train_set_seed $SEED --logging_steps 10 --max_steps $STEPS \
     --num_train $TRAIN --num_dev $DEV --num_eval $EVAL \
-    --trainer adalezo --load_float16 \
+    --trainer adadizo --load_float16 \
     --learning_rate $LR --zo_eps $EPS --per_device_train_batch_size $BS --per_device_eval_batch_size $BS \
     --lr_scheduler_type "constant" \
     --load_best_model_at_end --eval_strategy steps --save_strategy steps --save_total_limit 1 \
@@ -64,7 +70,12 @@ python run.py \
     --adalezo_tau $ADA_TAU \
     --adalezo_c $ADA_C \
     --adalezo_ipw_clip $ADA_CLIP \
-    --adalezo_layer_momentum $ADA_MOMENTUM \
+    \
+    --dizo_interval $DIZO_INTERVAL \
+    --dizo_iters $DIZO_ITERS \
+    --zo_eps_projection $ZO_EPS_PROJ \
+    --step_size_projection $STEP_SIZE_PROJ \
+    --clip_range $CLIP_RANGE \
     \
     $PEFT_ARGS \
     $TASK_ARGS \
