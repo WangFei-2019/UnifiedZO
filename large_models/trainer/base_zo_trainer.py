@@ -13,8 +13,8 @@ class BaseZOTrainer(Trainer):
     """
 
     def __init__(self, model, args =None, zo_evaluator=None, raw_dev_samples=None, raw_test_samples=None, **kwargs):
-        if args.trainer != "regular":
-            args.lr_scheduler_type = "constant"
+        # if args.trainer != "regular":
+        #     args.lr_scheduler_type = "constant"
         super().__init__(model=model, args=args, **kwargs)
         
         # Identify parameters to optimize (requires_grad=True)

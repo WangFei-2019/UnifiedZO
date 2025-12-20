@@ -13,10 +13,10 @@ EVAL_STEPS=${EVAL_STEPS:-2000}
 
 # --- DiZO Specific Params ---
 DIZO_INTERVAL=${DIZO_INTERVAL:-100}     # Interval steps for projection
-DIZO_ITERS=${DIZO_ITERS:-5}             # Number of ZO optimization steps for Gamma per projection
-ZO_EPS_PROJ=${ZO_EPS_PROJ:-1e-3}        # Epsilon for ZO gradient estimation during projection
-STEP_SIZE_PROJ=${STEP_SIZE_PROJ:-0.1}   # Step size (learning rate) for Gamma optimization
-CLIP_RANGE=${CLIP_RANGE:-1e-4}          # Clipping range (tau) for constraint parameters
+DIZO_ITERS=${DIZO_ITERS:-10}             # Number of ZO optimization steps for Gamma per projection
+ZO_EPS_PROJ=${ZO_EPS_PROJ:-0.1}        # Epsilon for ZO gradient estimation during projection
+STEP_SIZE_PROJ=${STEP_SIZE_PROJ:-2.0}   # Step size (learning rate) for Gamma optimization
+CLIP_RANGE=${CLIP_RANGE:-0.2}          # Clipping range (tau) for constraint parameters
 NORM_MODE=${NORM_MODE:-l2}              # Norm mode for constraints (l2 or mars)
 
 if [ "$MODE" == "lora" ]; then
@@ -55,7 +55,7 @@ python run.py \
     --num_train $TRAIN --num_dev $DEV --num_eval $EVAL \
     --trainer dizo --load_float16 \
     --learning_rate $LR --zo_eps $EPS --per_device_train_batch_size $BS --per_device_eval_batch_size $BS \
-    --lr_scheduler_type "constant" \
+    --lr_scheduler_type "linear" \
     --load_best_model_at_end --eval_strategy steps --save_strategy steps --save_total_limit 1 \
     --eval_steps $EVAL_STEPS --save_steps $EVAL_STEPS \
     --train_as_classification \

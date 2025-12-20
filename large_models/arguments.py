@@ -68,10 +68,10 @@ class ZOTrainingArguments(TrainingArguments):
 
     # --- DiZO Specific Arguments ---
     dizo_interval: int = field( default=100, metadata={"help": "Step interval to perform DiZO projection (regularization)."})
-    dizo_iters: int = field(default=5, metadata={"help": "Number of ZO optimization steps for the constraint parameter (gamma) during projection."})
-    zo_eps_projection: float = field(default=1e-3, metadata={"help": "Epsilon (perturbation scale) used for ZO gradient estimation of the projection constraints."})
-    step_size_projection: float = field(default=0.1, metadata={"help": "Learning rate/Step size for updating the constraint parameters (gamma)."})
-    clip_range: float = field(default=1e-4, metadata={"help": "Clipping range (tau) for the constraint parameters to prevent excessive deviation."})
+    dizo_iters: int = field(default=10, metadata={"help": "Number of ZO optimization steps for the constraint parameter (gamma) during projection."})
+    zo_eps_projection: float = field(default=0.1, metadata={"help": "Epsilon (perturbation scale) used for ZO gradient estimation of the projection constraints."})
+    step_size_projection: float = field(default=2.0, metadata={"help": "Learning rate/Step size for updating the constraint parameters (gamma)."})
+    clip_range: float = field(default=0.2, metadata={"help": "Clipping range (tau) for the constraint parameters to prevent excessive deviation."})
     norm_mode: str = field(default="l2", metadata={"help": "Norm type for projection constraints: 'l2' or 'mars' (L1-like)."})
 
     # --- MeZO-SVRG Specific Arguments ---

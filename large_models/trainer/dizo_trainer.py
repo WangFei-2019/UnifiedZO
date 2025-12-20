@@ -38,15 +38,15 @@ class DiZOConstraint(nn.Module):
     def _project_ratio(self, new_param, anchor_param, constraint_val):
         """Calculates the projection ratio alpha."""
         diff = new_param.detach() - anchor_param.detach()
-        
+
         if "l2" in self.norm_mode:
             norm = torch.norm(diff)
         else:
             # MARS-like norm (sum of abs dimensions excluding first) or L1
-            norm = torch.sum(torch.abs(diff)) 
+            norm = torch.sum(torch.abs(diff))
 
         # Avoid division by zero
-        ratio = constraint_val / (norm + 1e-8)
+        ratio = constraint_val.item() / (norm + 1e-8)
         return ratio
 
     def apply_constraints(self, model, anchor_model, constraint_iterator, save_alpha=False):
@@ -95,7 +95,7 @@ class DiZOConstraint(nn.Module):
             if name not in zs:
                 z = torch.normal(0, 1, size=(1,), device=gamma.device, dtype=gamma.dtype)
                 # Clip noise based on tau and ts (current parameter distance)
-                limit = (tau / zo_eps) * ts[i]
+                limit = ((tau / zo_eps) * ts[i]).item()
                 z = torch.clamp(z, -limit, limit)
                 zs[name] = z
             else:
@@ -235,18 +235,19 @@ class DiZOTrainer(MeZOTrainer):
 
         # 3. Update Gamma
         # Grad estimate: (L1 - L2) / (2 * eps)
-        grad = (loss1 - loss2) / (2 * zo_eps)
+        grad = ((loss1 - loss2) / (2 * zo_eps)).item()
         
         # Update rule: gamma = gamma - lr * grad * z * scaling
         # Note: We scale update by ts[i] as in original DiZO paper/code
         for i, (name, gamma) in enumerate(self.dizo_constraint.constraints.named_parameters()):
             tmp_z = zs[name]
+
             # Projected Gradient Descent on Gamma
-            update = step_size * ts[i] * grad * tmp_z
+            update = step_size * ts[i].item() * grad * tmp_z.item()
             new_val = gamma.data - update
             
             # Clip gamma to be within [1-tau, 1+tau] * original_distance
             # This prevents the constraint from deviating too wildly from the current trajectory
             lower = (1 - tau) * ts[i]
             upper = (1 + tau) * ts[i]
-            gamma.data = torch.clamp(new_val, lower, upper)
+            gamma.data = torch.clamp(new_val, lower.item(), upper.item())

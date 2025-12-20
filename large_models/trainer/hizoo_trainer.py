@@ -65,7 +65,7 @@ class HiZOOTrainer(BaseZOTrainer):
         
         for name, param in self.named_parameters_to_optim:
             z = self.generate_random_noise(param.data.size(), param.data.device, param.data.dtype, 'Gaussian')
-            hessian_sample = second_order_diff * (z**2)
+            hessian_sample = second_order_diff * (z**2) * self.hizoo_hessian[name]
             # EMA Update
             self.hizoo_hessian[name] = (1 - smooth) * self.hizoo_hessian[name] + smooth * hessian_sample
 
