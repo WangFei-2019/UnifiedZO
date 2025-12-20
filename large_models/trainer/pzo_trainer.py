@@ -136,40 +136,31 @@ class PZOTrainer(BaseZOTrainer):
 
     def pzo_forward(self, model, inputs, need_grad=False):
         """
-        Executes the PZO-specific forward pass.
-        Handling:
-        1. need_grad=True: Expects Tuple (loss, state, grad) packed in outputs.loss
-        2. need_grad=False: Expects Standard Output, retrieves state from hidden_states/logits
+        Modified PZO forward for UnifiedZO compatibility.
         """
         model.eval()
-        inputs = self._prepare_inputs(inputs)
-        
-        # Call model with need_grad flag
-        outputs = model(need_grad=need_grad, **inputs)
-        
-        # Check return format
-        if isinstance(outputs.loss, tuple):
-            # [Case A]: Training Step 1 (Gradient Calculation)
-            # Wrapper returned (loss, state, grad)
-            loss_val, state, grad_last = outputs.loss
-        else:
-            # [Case B]: Training Step 2 (Perturbed Forward) OR Evaluation
-            # Wrapper returned scalar loss. We need to manually extract state.
-            loss_val = outputs.loss
-            grad_last = None
+        with torch.no_grad():
+            inputs = self._prepare_inputs(inputs)
             
-            # Try to retrieve state (hidden_state or logits)
-            if hasattr(outputs, 'hidden_states') and outputs.hidden_states is not None:
-                # Corresponds to forward_wrap_with_option_len_pzo
-                # We packed state into hidden_states tuple
-                state = outputs.hidden_states[-1] if isinstance(outputs.hidden_states, tuple) else outputs.hidden_states
-            elif hasattr(outputs, 'logits') and outputs.logits is not None:
-                 # Corresponds to forward_wrap_with_option_len_pzo_logits
-                 # State is the logits
-                state = outputs.logits
+            # Use inference_mode context or just call model
+            # IMPORTANT: Pass is_pzo_step=True
+            if need_grad:
+                 outputs = model(need_grad=True, is_pzo_step=True, **inputs)
+                 loss_val, state, grad_last = outputs.loss
             else:
-                # Should not happen in PZO training flow
-                state = None 
+                 outputs = model(need_grad=False, is_pzo_step=True, **inputs)
+                 loss_val = outputs.loss
+                 grad_last = None
+                 
+                 if hasattr(outputs, 'hidden_states') and outputs.hidden_states is not None:
+                     state = outputs.hidden_states[-1] if isinstance(outputs.hidden_states, tuple) else outputs.hidden_states
+                 elif hasattr(outputs, 'logits') and outputs.logits is not None:
+                     state = outputs.logits
+                 else:
+                     state = None
+
+            if self.args.n_gpu > 1:
+                loss_val = loss_val.mean()
 
         return loss_val, state, grad_last
 

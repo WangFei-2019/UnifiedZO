@@ -148,10 +148,14 @@ def forward_wrap_with_option_len(
         attentions=outputs.attentions,
     )
 
-def forward_wrap_with_option_len_pzo(self, need_grad=False, Hessian_estimate=False, adjust_lm_head=False, input_ids=None, labels=None, option_len=None, num_options=None, return_dict=True, **kwargs):
+def forward_wrap_with_option_len_pzo(self, need_grad=False, Hessian_estimate=False, adjust_lm_head=False, input_ids=None, labels=None, option_len=None, num_options=None, return_dict=True, is_pzo_step=False, **kwargs):
     """
     PseuZO wrapper: Computes gradients w.r.t last_hidden_state.
-    Modified to support both PZO training (Tuple return) and Standard Evaluation (Object return).
+    
+    Args:
+        is_pzo_step (bool): Flag to indicate if this forward pass is part of the PZO training loop.
+                            If True, we preserve hidden states/logits for the optimizer.
+                            If False (e.g. Eval), we drop them to save memory.
     """
     # 1. First forward pass (No Grad) to get hidden states
     with torch.no_grad():
@@ -162,9 +166,8 @@ def forward_wrap_with_option_len_pzo(self, need_grad=False, Hessian_estimate=Fal
             return outputs
         
         # Capture the last hidden state
-        # Handle cases where hidden_states might be a tuple or tensor
         last_hidden_state = outputs.hidden_states[-1].detach() if isinstance(outputs.hidden_states, tuple) else outputs.hidden_states.detach()
-        del outputs # Free memory
+        del outputs # Free memory immediately
 
         # Prepare labels (masking logic)
         shift_labels = torch.clone(input_ids)[..., 1:].contiguous()
@@ -183,7 +186,6 @@ def forward_wrap_with_option_len_pzo(self, need_grad=False, Hessian_estimate=Fal
 
         # --- Classification or Causal LM Loss Calculation ---
         if num_options is not None:
-            # Classification logic
             log_probs = F.log_softmax(logits[..., :-1, :].contiguous(), dim=-1)
             mask = shift_labels != -100
             shift_labels[~mask] = 0
@@ -192,7 +194,6 @@ def forward_wrap_with_option_len_pzo(self, need_grad=False, Hessian_estimate=Fal
             selected_log_probs = (selected_log_probs * mask).sum(-1) / (mask.sum(-1) + 1e-9)
 
             if isinstance(num_options, list) and any([x != num_options[0] for x in num_options]):
-                # Dynamic options count
                 loss = 0
                 start_id = 0
                 count = 0
@@ -210,55 +211,54 @@ def forward_wrap_with_option_len_pzo(self, need_grad=False, Hessian_estimate=Fal
                 labels = labels.view(-1, n_opts)[:, 0]
                 loss = loss_fct(selected_log_probs, labels)
         else:
-            # Standard Causal LM logic
             shift_logits = logits[..., :-1, :].contiguous()
             loss = loss_fct(shift_logits.view(-1, self.config.vocab_size), shift_labels.view(-1))
 
-    # 3. Handle Return Logic based on need_grad
+    # 3. Handle Return Logic
     if need_grad:
-        # [PZO Training Step 1]: We need the gradient w.r.t hidden state
+        # [PZO Step 1]: Gradient calculation. Must return Tuple.
         if adjust_lm_head:
             grad_last = torch.autograd.grad(loss, [logits, self.lm_head.weight], create_graph=Hessian_estimate)
         else:
             grad_last = torch.autograd.grad(loss, logits if kwargs.get('logits',False) else last_hidden_state, create_graph=Hessian_estimate)[0]
         
-        # Must return Tuple for the Trainer to extract 'grad_last'
         loss_export = (loss.detach(), last_hidden_state, grad_last)
         
         if not return_dict:
             output = (1,)
             return (loss_export,) + output
 
-        return CausalLMOutputWithPast(
-            loss=loss_export, # Tuple in loss field
-            logits=None, 
-        )
+        return CausalLMOutputWithPast(loss=loss_export, logits=None)
+    
     else:
-        # [PZO Step 2 OR Evaluation]: return standard object with scalar loss
-        # Pass 'last_hidden_state' via 'hidden_states' field for PZO Step 2 recovery
-        
-        if not return_dict:
-            return (loss,) + (logits,)
+        # [PZO Step 2 OR Eval]: No gradient needed.
+        # Critical for Memory: Detach loss.
+        final_loss = loss.detach()
 
-        return CausalLMOutputWithPast(
-            loss=loss, # Scalar loss (Critical for Eval)
-            logits=logits,
-            hidden_states=(last_hidden_state,), # Piggyback state here
-            past_key_values=None,
-            attentions=None,
-        )
+        if is_pzo_step:
+            # [PZO Step 2]: We need the state (hidden_state) for the algorithm.
+            # We return it via hidden_states tuple.
+            final_logits = None # We don't need logits for PZO (hidden version), save memory.
+            return CausalLMOutputWithPast(
+                loss=final_loss,
+                logits=final_logits,
+                hidden_states=(last_hidden_state,), # Pass state here
+            )
+        else:
+            # [Standard Eval]: We need to save memory.
+            # Drop logits and hidden_states to prevent OOM during accumulation.
+            final_logits = None 
+            return CausalLMOutputWithPast(loss=final_loss, logits=final_logits)
 
 
-def forward_wrap_with_option_len_pzo_logits(self, need_grad=False, Hessian_estimate=False, adjust_lm_head=False, input_ids=None, labels=None, option_len=None, num_options=None, return_dict=True, **kwargs):
+def forward_wrap_with_option_len_pzo_logits(self, need_grad=False, Hessian_estimate=False, adjust_lm_head=False, input_ids=None, labels=None, option_len=None, num_options=None, return_dict=True, is_pzo_step=False, **kwargs):
     """
-    PseuZO wrapper: Computes gradients w.r.t logits (optimized for LLaMA).
-    Modified to support both PZO training (Tuple return) and Standard Evaluation (Object return).
+    PseuZO wrapper (Logits version).
     """
     # 1. Forward to get logits
     with torch.no_grad():
         outputs = self.original_forward(input_ids=input_ids, output_hidden_states=False, **kwargs)
-        if labels is None:
-            return outputs
+        if labels is None: return outputs
         logits = outputs.logits.detach()
         del outputs
         
@@ -305,29 +305,27 @@ def forward_wrap_with_option_len_pzo_logits(self, need_grad=False, Hessian_estim
 
     # 3. Handle Return Logic
     if need_grad:
-        # [Step 1] Calculate Gradient w.r.t Logits
+        # [PZO Step 1]
         if adjust_lm_head:
              grad_last = torch.autograd.grad(loss, [logits, self.lm_head.weight], create_graph=Hessian_estimate)
         else:
             grad_last = torch.autograd.grad(loss, logits, create_graph=Hessian_estimate)[0]
             
         loss_export = (loss.detach(), logits, grad_last)
+        if not return_dict: return (loss_export,) + (1,)
+        return CausalLMOutputWithPast(loss=loss_export, logits=None)
 
-        if not return_dict:
-            output = (1,)
-            return (loss_export,) + output
-
-        return CausalLMOutputWithPast(
-            loss=loss_export, # Tuple
-            logits=None
-        )
     else:
-        # [Step 2 / Eval] Return standard object
-        if not return_dict:
-            return (loss,) + (logits,)
-
-        # For logits wrapper, 'logits' IS the state we need to preserve
-        return CausalLMOutputWithPast(loss=loss, logits=logits)
+        # [PZO Step 2 OR Eval]
+        final_loss = loss.detach()
+        
+        if is_pzo_step:
+            # [PZO Step 2]: For logits version, the 'state' IS the logits.
+            # We must return it so PZO can compute o1 - o0.
+            return CausalLMOutputWithPast(loss=final_loss, logits=logits)
+        else:
+            # [Standard Eval]: Drop logits to prevent OOM.
+            return CausalLMOutputWithPast(loss=final_loss, logits=None)
 
 
 def forward_wrap_with_option_len_fzoo(self, input_ids=None, labels=None, option_len=None, num_options=None, return_dict=None, **kwargs):
