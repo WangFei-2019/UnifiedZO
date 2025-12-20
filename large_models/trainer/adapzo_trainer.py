@@ -168,11 +168,12 @@ class AdaPZOTrainer(AdaLeZOTrainer):
     # --------------------------------------------------------------------------
     # Utilities ported from PZOTrainer
     # --------------------------------------------------------------------------
-
     def pzo_forward(self, model, inputs, need_grad=False):
         """
-        Executes the PZO-specific forward pass that returns (loss, state, grad).
-        Assumes model is wrapped with `forward_wrap_with_option_len_pzo`.
+        Executes the PZO-specific forward pass.
+        Handling:
+        1. need_grad=True: Expects Tuple (loss, state, grad) packed in outputs.loss
+        2. need_grad=False: Expects Standard Output, retrieves state from hidden_states/logits
         """
         model.eval()
         inputs = self._prepare_inputs(inputs)
@@ -180,12 +181,30 @@ class AdaPZOTrainer(AdaLeZOTrainer):
         # Call model with need_grad flag
         outputs = model(need_grad=need_grad, **inputs)
         
-        # Unpack PZO specific return format
+        # Check return format
         if isinstance(outputs.loss, tuple):
+            # [Case A]: Training Step 1 (Gradient Calculation)
+            # Wrapper returned (loss, state, grad)
             loss_val, state, grad_last = outputs.loss
         else:
-            raise RuntimeError("PseuZO forward wrapper returned unexpected format. Ensure 'forward_wrap_with_option_len_pzo' is applied via args.trainer='adapzo'.")
-        
+            # [Case B]: Training Step 2 (Perturbed Forward) OR Evaluation
+            # Wrapper returned scalar loss. We need to manually extract state.
+            loss_val = outputs.loss
+            grad_last = None
+            
+            # Try to retrieve state (hidden_state or logits)
+            if hasattr(outputs, 'hidden_states') and outputs.hidden_states is not None:
+                # Corresponds to forward_wrap_with_option_len_pzo
+                # We packed state into hidden_states tuple
+                state = outputs.hidden_states[-1] if isinstance(outputs.hidden_states, tuple) else outputs.hidden_states
+            elif hasattr(outputs, 'logits') and outputs.logits is not None:
+                 # Corresponds to forward_wrap_with_option_len_pzo_logits
+                 # State is the logits
+                state = outputs.logits
+            else:
+                # Should not happen in PZO training flow
+                state = None 
+
         return loss_val, state, grad_last
 
     def _update_momentum_coefficient(self):

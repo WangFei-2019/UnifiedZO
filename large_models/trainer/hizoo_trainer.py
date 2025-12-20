@@ -61,13 +61,14 @@ class HiZOOTrainer(BaseZOTrainer):
         smooth = hessian_smooth_scheduler(self.args.hessian_smooth_type, self.state.global_step, self.state.max_steps)
         
         # Calculate second order difference scalar
-        second_order_diff = (torch.abs(loss1 + loss2 - 2 * loss_orig) / (2 * self.args.zo_eps**2)).item()
+        diff = torch.abs(loss1 + loss2 - 2 * loss_orig).item()
         
         for name, param in self.named_parameters_to_optim:
             z = self.generate_random_noise(param.data.size(), param.data.device, param.data.dtype, 'Gaussian')
-            hessian_sample = second_order_diff * (z**2) * self.hizoo_hessian[name]
+            hessian_temp = self.hizoo_hessian[name] * (z**2)
+            hessian_estimator = (diff * hessian_temp * smooth) / (2 * self.args.zo_eps**2)
             # EMA Update
-            self.hizoo_hessian[name] = (1 - smooth) * self.hizoo_hessian[name] + smooth * hessian_sample
+            self.hizoo_hessian[name] = (1 - smooth) * self.hizoo_hessian[name] + hessian_estimator
 
     def _update_hizoo(self):
         torch.manual_seed(self.zo_random_seed)

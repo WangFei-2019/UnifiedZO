@@ -151,18 +151,22 @@ def forward_wrap_with_option_len(
 def forward_wrap_with_option_len_pzo(self, need_grad=False, Hessian_estimate=False, adjust_lm_head=False, input_ids=None, labels=None, option_len=None, num_options=None, return_dict=True, **kwargs):
     """
     PseuZO wrapper: Computes gradients w.r.t last_hidden_state.
+    Modified to support both PZO training (Tuple return) and Standard Evaluation (Object return).
     """
     # 1. First forward pass (No Grad) to get hidden states
     with torch.no_grad():
+        # Ensure output_hidden_states=True to capture the state for PZO
         outputs = self.original_forward(input_ids=input_ids, output_hidden_states=True, **kwargs)
 
         if labels is None:
             return outputs
+        
         # Capture the last hidden state
+        # Handle cases where hidden_states might be a tuple or tensor
         last_hidden_state = outputs.hidden_states[-1].detach() if isinstance(outputs.hidden_states, tuple) else outputs.hidden_states.detach()
         del outputs # Free memory
 
-        # Prepare labels
+        # Prepare labels (masking logic)
         shift_labels = torch.clone(input_ids)[..., 1:].contiguous()
         shift_labels[shift_labels == self.config.pad_token_id] = -100
         for _i, _len in enumerate(option_len):
@@ -177,6 +181,7 @@ def forward_wrap_with_option_len_pzo(self, need_grad=False, Hessian_estimate=Fal
         # Re-compute logits from hidden state using lm_head
         logits = self.lm_head(last_hidden_state)
 
+        # --- Classification or Causal LM Loss Calculation ---
         if num_options is not None:
             # Classification logic
             log_probs = F.log_softmax(logits[..., :-1, :].contiguous(), dim=-1)
@@ -205,45 +210,52 @@ def forward_wrap_with_option_len_pzo(self, need_grad=False, Hessian_estimate=Fal
                 labels = labels.view(-1, n_opts)[:, 0]
                 loss = loss_fct(selected_log_probs, labels)
         else:
-            # Causal LM logic
+            # Standard Causal LM logic
             shift_logits = logits[..., :-1, :].contiguous()
             loss = loss_fct(shift_logits.view(-1, self.config.vocab_size), shift_labels.view(-1))
 
-    # 3. Calculate Gradient w.r.t Hidden State (Projection Vector)
-    if not need_grad:
-        grad_last = None
-        loss_export = (loss.detach(), last_hidden_state, grad_last)
-    else:
+    # 3. Handle Return Logic based on need_grad
+    if need_grad:
+        # [PZO Training Step 1]: We need the gradient w.r.t hidden state
         if adjust_lm_head:
             grad_last = torch.autograd.grad(loss, [logits, self.lm_head.weight], create_graph=Hessian_estimate)
         else:
             grad_last = torch.autograd.grad(loss, logits if kwargs.get('logits',False) else last_hidden_state, create_graph=Hessian_estimate)[0]
         
-        # Return detached loss, detached state, and the computed gradient
+        # Must return Tuple for the Trainer to extract 'grad_last'
         loss_export = (loss.detach(), last_hidden_state, grad_last)
+        
+        if not return_dict:
+            output = (1,)
+            return (loss_export,) + output
 
-    if not return_dict:
-        output = (1,)
-        return (loss_export,) + output
+        return CausalLMOutputWithPast(
+            loss=loss_export, # Tuple in loss field
+            logits=None, 
+        )
+    else:
+        # [PZO Step 2 OR Evaluation]: return standard object with scalar loss
+        # Pass 'last_hidden_state' via 'hidden_states' field for PZO Step 2 recovery
+        
+        if not return_dict:
+            return (loss,) + (logits,)
 
-    # Creating a dummy output to satisfy Trainer interface
-    return CausalLMOutputWithPast(
-        loss=loss_export,
-        logits=None, 
-    )
+        return CausalLMOutputWithPast(
+            loss=loss, # Scalar loss (Critical for Eval)
+            logits=logits,
+            hidden_states=(last_hidden_state,), # Piggyback state here
+            past_key_values=None,
+            attentions=None,
+        )
 
 
 def forward_wrap_with_option_len_pzo_logits(self, need_grad=False, Hessian_estimate=False, adjust_lm_head=False, input_ids=None, labels=None, option_len=None, num_options=None, return_dict=True, **kwargs):
     """
-    PseuZO wrapper: Computes gradients w.r.t logits (for models like LLaMA where untying embeddings is tricky).
+    PseuZO wrapper: Computes gradients w.r.t logits (optimized for LLaMA).
+    Modified to support both PZO training (Tuple return) and Standard Evaluation (Object return).
     """
     # 1. Forward to get logits
-    # Note: We must allow gradient flow to logits here, so we don't use no_grad context broadly,
-    # but we detach earlier layers implicitly by only asking for grad on logits later? 
-    # Actually, to save memory, we usually run forward in no_grad, detach logits, then enable grad on logits.
-    
     with torch.no_grad():
-        # output_hidden_states=False to save memory
         outputs = self.original_forward(input_ids=input_ids, output_hidden_states=False, **kwargs)
         if labels is None:
             return outputs
@@ -262,6 +274,7 @@ def forward_wrap_with_option_len_pzo_logits(self, need_grad=False, Hessian_estim
         loss_fct = CrossEntropyLoss(ignore_index=-100)
 
         if num_options is not None:
+            # Classification Logic
             log_probs = F.log_softmax(logits[..., :-1, :].contiguous(), dim=-1)
             mask = shift_labels != -100
             shift_labels[~mask] = 0
@@ -286,27 +299,35 @@ def forward_wrap_with_option_len_pzo_logits(self, need_grad=False, Hessian_estim
                 labels = labels.view(-1, n_opts)[:, 0]
                 loss = loss_fct(selected_log_probs, labels)
         else:
+            # Causal LM Logic
             shift_logits = logits[..., :-1, :].contiguous()
             loss = loss_fct(shift_logits.view(-1, self.config.vocab_size), shift_labels.view(-1))
 
-    # 3. Compute Gradient w.r.t Logits
-    if not need_grad:
-        grad_last = None
-        loss = (loss.detach(), logits, grad_last)
-    else:
+    # 3. Handle Return Logic
+    if need_grad:
+        # [Step 1] Calculate Gradient w.r.t Logits
         if adjust_lm_head:
-             # Logic for adjusting head would imply gradients on weights, but here we focus on logits
              grad_last = torch.autograd.grad(loss, [logits, self.lm_head.weight], create_graph=Hessian_estimate)
         else:
             grad_last = torch.autograd.grad(loss, logits, create_graph=Hessian_estimate)[0]
             
-        loss = (loss.detach(), logits, grad_last)
+        loss_export = (loss.detach(), logits, grad_last)
 
-    if not return_dict:
-        output = (1,)
-        return (loss,) + output if loss is not None else output
+        if not return_dict:
+            output = (1,)
+            return (loss_export,) + output
 
-    return CausalLMOutputWithPast(loss=loss, logits=None)
+        return CausalLMOutputWithPast(
+            loss=loss_export, # Tuple
+            logits=None
+        )
+    else:
+        # [Step 2 / Eval] Return standard object
+        if not return_dict:
+            return (loss,) + (logits,)
+
+        # For logits wrapper, 'logits' IS the state we need to preserve
+        return CausalLMOutputWithPast(loss=loss, logits=logits)
 
 
 def forward_wrap_with_option_len_fzoo(self, input_ids=None, labels=None, option_len=None, num_options=None, return_dict=None, **kwargs):
