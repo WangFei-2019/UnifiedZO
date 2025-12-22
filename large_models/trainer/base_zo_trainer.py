@@ -141,7 +141,7 @@ class BaseZOTrainer(Trainer):
             # Convert tensor to float
             if isinstance(val, torch.Tensor):
                 if val.numel() > 1:
-                    val = val.mean().item() # 或者选择不记录该向量
+                    val = val.mean().item()
                 else:
                     val = val.item()
                 

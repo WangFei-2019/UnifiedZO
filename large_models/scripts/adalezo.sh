@@ -15,7 +15,7 @@ EVAL_STEPS=${EVAL_STEPS:-2000}
 ADA_KRATIO=${ADA_KRATIO:-0.2}   # Ratio of layers to select (e.g., 0.2 for 20%)
 ADA_TAU=${ADA_TAU:-0.2}         # Temperature for Softmax/Gumbel
 ADA_C=${ADA_C:-0.7}             # Exploration constant
-ADA_CLIP=${ADA_CLIP:-16}        # IPW clipping threshold
+ADA_CLIP=${ADA_CLIP:-32}        # IPW clipping threshold
 ADA_MOMENTUM=${ADA_MOMENTUM:-False} # Whether to use momentum for layer selection
 
 if [ "$MODE" == "lora" ]; then

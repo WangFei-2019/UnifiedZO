@@ -97,11 +97,11 @@ class AdaLeZOTrainer(BaseZOTrainer):
 
         # Normalize rewards for numerical stability
         max_reward = self.layer_avg_rewards.max()
-        normalized_rewards = self.layer_avg_rewards / max_reward if max_reward > 1e-6 else self.layer_avg_rewards
+        self.normalized_rewards = self.layer_avg_rewards / max_reward if max_reward > 1e-6 else self.layer_avg_rewards
         
         # Calculate UCB Scores: Q(a) + c * sqrt(log(t) / N(a))
-        exploration_term = self.args.adalezo_c * torch.sqrt(math.log(t * k) / (self.layer_counts + 1e-1))
-        ucb_scores = normalized_rewards + exploration_term
+        self.exploration_term = self.args.adalezo_c * torch.sqrt(math.log(t * k) / (self.layer_counts + 1e-1))
+        ucb_scores = self.normalized_rewards + self.exploration_term
 
         # Convert scores to probabilities via Softmax (Temperature controlled)
         self.layer_probs = torch.nn.functional.softmax(ucb_scores / self.args.adalezo_tau, dim=0)
@@ -241,7 +241,9 @@ class AdaLeZOTrainer(BaseZOTrainer):
         data = {
             "step": self.state.global_step,
             "probs": self.layer_probs.detach().cpu().tolist(),
-            "active": self.current_active_layers
+            "active": self.current_active_layers,
+            "normalized_rewards": self.normalized_rewards.detach().cpu().tolist(),
+            "exploration_term": self.exploration_term.detach().cpu().tolist(),
         }
         
         # Save to output dir
