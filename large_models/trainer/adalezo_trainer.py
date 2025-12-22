@@ -15,9 +15,9 @@ class AdaLeZOTrainer(BaseZOTrainer):
     
     Mechanism:
     1. Divides parameters into groups (layers).
-    2. Uses Multi-Armed Bandit (UCB) logic to select a sparse subset of layers (active layers) to perturb.
-    3. Estimates gradients using ZO only on active layers (saving Forward/Backward memory and time).
-    4. Updates parameters using Inverse Probability Weighting (IPW) to correct for sampling bias.
+    2. Uses Multi-Armed Bandit logic (modified to use EMA rewards) to select a sparse subset of layers.
+    3. Estimates gradients using ZO only on active layers.
+    4. Updates parameters using Inverse Probability Weighting (IPW).
     """
 
     def __init__(self, model, args, **kwargs):
@@ -35,7 +35,7 @@ class AdaLeZOTrainer(BaseZOTrainer):
 
     def init_adalezo_state(self, model):
         """
-        Parses model parameters to group them by layers and initializes Bandit statistics (UCB).
+        Parses model parameters to group them by layers and initializes Bandit statistics.
         """
         self.params_by_layer = {}
         
@@ -44,7 +44,6 @@ class AdaLeZOTrainer(BaseZOTrainer):
                 continue
             
             # Regex to extract layer index. Supports standard HF models (Llama, OPT, BERT, etc.)
-            # Matches patterns like 'layers.0.', 'blocks.1.', 'h.2.'
             match = re.search(r"\.(layers|block|h|blocks)\.(\d+)\.", name)
             
             # Key determination:
@@ -87,26 +86,23 @@ class AdaLeZOTrainer(BaseZOTrainer):
 
     def _resample_layers(self):
         """
-        Selects active layers for the next block of steps using UCB1 strategy.
+        Selects active layers for the next block of steps.
+        [MODIFIED] Removed UCB exploration term to avoid forcing updates on insensitive layers in late training.
+        Relies on EMA rewards for exploitation and Gamma mixing for exploration.
         """
         # Number of layers to select (k)
         k = max(1, int(self.args.adalezo_k_ratio * self.num_layers))
         
-        # Current time step t (avoid log(0))
-        t = self.state.global_step + 1
-
         # Normalize rewards for numerical stability
         max_reward = self.layer_avg_rewards.max()
-        self.normalized_rewards = self.layer_avg_rewards / max_reward if max_reward > 1e-6 else self.layer_avg_rewards
+        # Use rewards directly as scores (Exploitation)
+        scores = self.layer_avg_rewards / max_reward if max_reward > 1e-6 else self.layer_avg_rewards
         
-        # Calculate UCB Scores: Q(a) + c * sqrt(log(t) / N(a))
-        self.exploration_term = self.args.adalezo_c * torch.sqrt(math.log(t * k) / (self.layer_counts + 1e-1))
-        ucb_scores = self.normalized_rewards + self.exploration_term
-
         # Convert scores to probabilities via Softmax (Temperature controlled)
-        self.layer_probs = torch.nn.functional.softmax(ucb_scores / self.args.adalezo_tau, dim=0)
+        self.layer_probs = torch.nn.functional.softmax(scores / self.args.adalezo_tau, dim=0)
 
         # Mix with uniform distribution to ensure exploration (Gamma)
+        # This prevents any layer from having 0 probability (starvation)
         self.layer_probs = (1 - self.args.adalezo_gamma) * self.layer_probs + self.args.adalezo_gamma * (1.0 / self.num_layers)
 
         # Sample k indices
@@ -158,7 +154,6 @@ class AdaLeZOTrainer(BaseZOTrainer):
     def _perturb_active_layers(self, scaling_factor):
         """
         Apply perturbations only to the layers selected by the Bandit.
-        This is critical for the efficiency gain of AdaLeZO.
         """
         # Deterministic seeding per layer to ensure consistency
         base_seed = self.zo_random_seed
@@ -174,7 +169,7 @@ class AdaLeZOTrainer(BaseZOTrainer):
     def _update_adalezo(self):
         """
         Update parameters using Inverse Probability Weighting (IPW).
-        Also updates the UCB statistics.
+        Also updates the Bandit statistics using EMA.
         """
         args = self.args
         lr = self._get_learning_rate()
@@ -229,12 +224,14 @@ class AdaLeZOTrainer(BaseZOTrainer):
             # --- Update Bandit Stats ---
             idx = self.sorted_layer_keys.index(layer_key)
             self.layer_counts[idx] += 1
-            # Incremental Average Update
-            self.layer_avg_rewards[idx] += (step_reward - self.layer_avg_rewards[idx]) / self.layer_counts[idx]
+            
+            # [MODIFIED] Use Exponential Moving Average (EMA) for rewards
+            # This allows the bandit to forget early history and adapt to recent gradient magnitudes.
+            self.layer_avg_rewards[idx] = (1 - args.adalezo_ema_alpha) * self.layer_avg_rewards[idx] + args.adalezo_ema_alpha * step_reward
 
     def _log_probs(self):
         """
-        Helper to log probability evolution to file (matches original implementation style).
+        Helper to log probability evolution to file.
         """
         if self.layer_probs is None: return
         
@@ -242,8 +239,8 @@ class AdaLeZOTrainer(BaseZOTrainer):
             "step": self.state.global_step,
             "probs": self.layer_probs.detach().cpu().tolist(),
             "active": self.current_active_layers,
-            "normalized_rewards": self.normalized_rewards.detach().cpu().tolist(),
-            "exploration_term": self.exploration_term.detach().cpu().tolist(),
+            # No exploration term to log anymore
+            "normalized_rewards": self.layer_avg_rewards.detach().cpu().tolist(), 
         }
         
         # Save to output dir

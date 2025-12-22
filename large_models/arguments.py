@@ -88,6 +88,8 @@ class ZOTrainingArguments(TrainingArguments):
     adalezo_warm_start: bool = field(default=False, metadata={"help": "Warm-start probabilities based on layer depth (bias towards deeper layers initially)."})
     adalezo_gamma: float = field(default=0.01, metadata={"help": "Mixing factor for uniform distribution to ensure non-zero probability."})
     adalezo_interval: int = field(default=1, metadata={"help": "Re-sample active layers every N steps (Stickiness strategy)."})
+    # [新增参数] 用于 EMA 更新的 alpha
+    adalezo_ema_alpha: float = field(default=0.1, metadata={"help": "EMA smoothing factor for AdaLeZO reward updates (alpha). Higher values make the bandit adapt faster to recent gradients."})
 
     # --- Training Strategy ---
     only_train_option: bool = field(default=True, metadata={"help": "If True, only calculates loss on the answer/option part."})

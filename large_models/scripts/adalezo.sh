@@ -17,6 +17,8 @@ ADA_TAU=${ADA_TAU:-0.2}         # Temperature for Softmax/Gumbel
 ADA_C=${ADA_C:-0.7}             # Exploration constant
 ADA_CLIP=${ADA_CLIP:-32}        # IPW clipping threshold
 ADA_MOMENTUM=${ADA_MOMENTUM:-False} # Whether to use momentum for layer selection
+# [新增参数] 用于 EMA 更新的 alpha
+ADA_ALPHA=${ADA_ALPHA:-0.1}       # EMA alpha
 
 if [ "$MODE" == "lora" ]; then
     LR=${LR:-5e-5}
@@ -32,7 +34,7 @@ else
     PEFT_ARGS=""
 fi
 
-TAG=adalezo-$MODE-$STEPS-$BS-$LR-$EPS-k${ADA_KRATIO}-t${ADA_TAU}-c${ADA_C}-clip${ADA_CLIP}-$SEED
+TAG=adalezo-$MODE-$STEPS-$BS-$LR-$EPS-k${ADA_KRATIO}-t${ADA_TAU}-c${ADA_C}-clip${ADA_CLIP}-$SEED-ema
 TASK_ARGS=""
 GRAD_ACCUM_STEPS=1
 
@@ -65,6 +67,7 @@ python run.py \
     --adalezo_c $ADA_C \
     --adalezo_ipw_clip $ADA_CLIP \
     --adalezo_layer_momentum $ADA_MOMENTUM \
+    --adalezo_ema_alpha $ADA_ALPHA \
     \
     $PEFT_ARGS \
     $TASK_ARGS \
