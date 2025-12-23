@@ -34,7 +34,7 @@ else
     PEFT_ARGS=""
 fi
 
-TAG=adalezo-$MODE-$STEPS-$BS-$LR-$EPS-k${ADA_KRATIO}-t${ADA_TAU}-c${ADA_C}-clip${ADA_CLIP}-$SEED-ema
+TAG=adalezo-$MODE-$STEPS-$BS-$LR-$EPS-k${ADA_KRATIO}-t${ADA_TAU}-c${ADA_C}-clip${ADA_CLIP}-$SEED
 TASK_ARGS=""
 GRAD_ACCUM_STEPS=1
 

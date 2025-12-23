@@ -87,7 +87,7 @@ class AdaLeZOTrainer(BaseZOTrainer):
 
     def _resample_layers(self):
         """
-        Selects active layers for the next block of steps using UCB1 strategy.
+        Selects active layers for the next block of steps using UCB strategy.
         """
         # Number of layers to select (k)
         k = max(1, int(self.args.adalezo_k_ratio * self.num_layers))
