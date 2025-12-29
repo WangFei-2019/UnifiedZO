@@ -5,5 +5,5 @@ MeZO
 *.txt
 code_to_txt.py
 trash
-adalezo_trainer_ema.py
-adalezo_trainer_ucb_noreplace.py
+large_models/trainer/adalezo_trainer_ema.py
+large_models/trainer/adalezo_trainer_ucb_noreplace.py
