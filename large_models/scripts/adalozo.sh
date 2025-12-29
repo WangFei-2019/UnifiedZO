@@ -12,11 +12,12 @@ STEPS=${STEPS:-20000}
 EVAL_STEPS=${EVAL_STEPS:-2000}
 
 # --- AdaLeZO Params ---
-ADA_KRATIO=${ADA_KRATIO:-0.1}
-ADA_TAU=${ADA_TAU:-0.1}
-ADA_C=${ADA_C:-0.7}
-ADA_CLIP=${ADA_CLIP:-10}
-ADA_MOMENTUM=${ADA_MOMENTUM:-False}
+ADA_KRATIO=${ADA_KRATIO:-0.2}   # Ratio of layers to select (e.g., 0.2 for 20%)
+ADA_TAU=${ADA_TAU:-0.6}         # Temperature for Softmax/Gumbel  0.5-0.7
+ADA_CLIP=${ADA_CLIP:-4}        # IPW clipping threshold: 16 for easy tasks, 4 for hard tasks
+ADA_MOMENTUM=${ADA_MOMENTUM:-False} # Whether to use momentum for layer selection
+ADA_GAMMA=${ADA_GAMMA:-0.1}
+ADA_ALPHA=${ADA_ALPHA:-0.1}       # EMA smoothing factor 
 
 # --- LOZO Params ---
 LOZO_RANK=${LOZO_RANK:-1} # Rank for the low-rank gradient estimation (typically 1, 2, or 4)
@@ -36,7 +37,7 @@ else
 fi
 
 # Tag includes AdaLeZO Ratio (k) and LOZO Rank
-TAG=adalozo-$MODE-$STEPS-$BS-$LR-$EPS-k${ADA_KRATIO}-rank${LOZO_RANK}-$SEED
+TAG=adalozo-$MODE-$STEPS-$BS-$LR-$EPS-k${ADA_KRATIO}-t${ADA_TAU}-alpha${ADA_ALPHA}-clip${ADA_CLIP}-gamma${ADA_GAMMA}-rank${LOZO_RANK}-$SEED
 TASK_ARGS=""
 GRAD_ACCUM_STEPS=1
 
@@ -66,9 +67,11 @@ python run.py \
     \
     --adalezo_k_ratio $ADA_KRATIO \
     --adalezo_tau $ADA_TAU \
-    --adalezo_c $ADA_C \
+    --adalezo_ema_alpha $ADA_ALPHA \
     --adalezo_ipw_clip $ADA_CLIP \
     --adalezo_layer_momentum $ADA_MOMENTUM \
+    --adalezo_ema_alpha $ADA_ALPHA \
+    --adalezo_gamma $ADA_GAMMA \
     \
     --lozo_rank $LOZO_RANK \
     \

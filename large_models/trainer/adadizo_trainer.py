@@ -141,13 +141,14 @@ class AdaDiZOTrainer(AdaLeZOTrainer):
         self.dizo_constraint.perturb_gamma(1, ts, zs, tau, zo_eps)
 
         # 3. Update Gamma
-        grad = (loss1 - loss2) / (2 * zo_eps)
+        # Grad estimate: (L1 - L2) / (2 * eps)
+        grad = ((loss1 - loss2) / (2 * zo_eps)).item()
         
         for i, (name, gamma) in enumerate(self.dizo_constraint.constraints.named_parameters()):
             tmp_z = zs[name]
-            update = step_size * ts[i] * grad * tmp_z
+            update = step_size * ts[i].item() * grad * tmp_z.item()
             
             new_val = gamma.data - update
             lower = (1 - tau) * ts[i]
             upper = (1 + tau) * ts[i]
-            gamma.data = torch.clamp(new_val, lower, upper)
+            gamma.data = torch.clamp(new_val, lower.item(), upper.item())

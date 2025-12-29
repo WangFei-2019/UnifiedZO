@@ -12,6 +12,7 @@ class ZOTrainingArguments(TrainingArguments):
     # --- Task and Model Arguments ---
     task_name: str = field(default="SST2", metadata={"help": "Task name (e.g., SST2, BoolQ, SQuAD). Must match class names in tasks/tasks.py"})
     model_name: str = field(default="facebook/opt-125m",metadata={"help": "Path to pretrained model or model identifier from huggingface.co/models"})
+    load_float32: bool = field(default=False, metadata={"help": "Load model in fp32."})
     load_float16: bool = field(default=False, metadata={"help": "Load model in fp16."})
     load_bfloat16: bool = field(default=False, metadata={"help": "Load model in bf16."})
     load_int8: bool = field(default=False, metadata={"help": "Load model in int8 (8-bit quantization)."})
@@ -79,16 +80,15 @@ class ZOTrainingArguments(TrainingArguments):
     svrg_k: int = field(default=1, metadata={"help": "Number of ZO samples to use when estimating the full gradient (mu) at the anchor point."})
 
     # --- AdaLeZO Specific Arguments ---
-    adalezo_k_ratio: float = field(default=0.1, metadata={"help": "Ratio of layers to sample per step (e.g., 0.1 means 10% of layers are active)."})
-    adalezo_tau: float = field(default=0.1, metadata={"help": "Temperature for Softmax exploration in layer selection."})
-    adalezo_c: float = field(default=0.7, metadata={"help": "UCB Exploration Constant. Larger values encourage exploring less selected layers."})
-    adalezo_ipw_clip: float = field(default=10.0, metadata={"help": "Maximum clipping value for Inverse Probability Weighting (IPW) to prevent gradient explosion."})
+    adalezo_k_ratio: float = field(default=0.2, metadata={"help": "Ratio of layers to sample per step (e.g., 0.1 means 10% of layers are active)."})
+    adalezo_tau: float = field(default=0.6, metadata={"help": "Temperature for Softmax exploration in layer selection."})
+    # adalezo_c: float = field(default=0.7, metadata={"help": "UCB Exploration Constant. Larger values encourage exploring less selected layers."})
+    adalezo_ipw_clip: float = field(default=4.0, metadata={"help": "Maximum clipping value for Inverse Probability Weighting (IPW) to prevent gradient explosion."})
     adalezo_layer_momentum: bool = field(default=False, metadata={"help": "Enable layer-wise adaptive scaling (RMSProp-style variance tracking)."})
     adalezo_beta: float = field(default=0.95, metadata={"help": "Decay factor for the layer-wise adaptive scaling."})
     adalezo_warm_start: bool = field(default=False, metadata={"help": "Warm-start probabilities based on layer depth (bias towards deeper layers initially)."})
-    adalezo_gamma: float = field(default=0.01, metadata={"help": "Mixing factor for uniform distribution to ensure non-zero probability."})
+    adalezo_gamma: float = field(default=0.1, metadata={"help": "Mixing factor for uniform distribution to ensure non-zero probability."})
     adalezo_interval: int = field(default=1, metadata={"help": "Re-sample active layers every N steps (Stickiness strategy)."})
-    # [新增参数] 用于 EMA 更新的 alpha
     adalezo_ema_alpha: float = field(default=0.1, metadata={"help": "EMA smoothing factor for AdaLeZO reward updates (alpha). Higher values make the bandit adapt faster to recent gradients."})
 
     # --- Training Strategy ---

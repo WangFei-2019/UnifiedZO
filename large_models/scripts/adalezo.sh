@@ -13,12 +13,11 @@ EVAL_STEPS=${EVAL_STEPS:-2000}
 
 # --- AdaLeZO Params ---
 ADA_KRATIO=${ADA_KRATIO:-0.2}   # Ratio of layers to select (e.g., 0.2 for 20%)
-ADA_TAU=${ADA_TAU:-0.2}         # Temperature for Softmax/Gumbel
-ADA_C=${ADA_C:-0.7}             # Exploration constant
-ADA_CLIP=${ADA_CLIP:-32}        # IPW clipping threshold
+ADA_TAU=${ADA_TAU:-0.6}         # Temperature for Softmax/Gumbel  0.5-0.7
+ADA_CLIP=${ADA_CLIP:-4}        # IPW clipping threshold: 16 for easy tasks, 4 for hard tasks
 ADA_MOMENTUM=${ADA_MOMENTUM:-False} # Whether to use momentum for layer selection
-# [新增参数] 用于 EMA 更新的 alpha
-ADA_ALPHA=${ADA_ALPHA:-0.1}       # EMA alpha
+ADA_GAMMA=${ADA_GAMMA:-0.1}
+ADA_ALPHA=${ADA_ALPHA:-0.1}       # EMA smoothing factor 
 
 if [ "$MODE" == "lora" ]; then
     LR=${LR:-5e-5}
@@ -34,7 +33,7 @@ else
     PEFT_ARGS=""
 fi
 
-TAG=adalezo-$MODE-$STEPS-$BS-$LR-$EPS-k${ADA_KRATIO}-t${ADA_TAU}-c${ADA_C}-clip${ADA_CLIP}-$SEED
+TAG=adalezo-$MODE-$STEPS-$BS-$LR-$EPS-k${ADA_KRATIO}-t${ADA_TAU}-alpha${ADA_ALPHA}-clip${ADA_CLIP}-gamma${ADA_GAMMA}-$SEED
 TASK_ARGS=""
 GRAD_ACCUM_STEPS=1
 
@@ -64,10 +63,11 @@ python run.py \
     \
     --adalezo_k_ratio $ADA_KRATIO \
     --adalezo_tau $ADA_TAU \
-    --adalezo_c $ADA_C \
+    --adalezo_ema_alpha $ADA_ALPHA \
     --adalezo_ipw_clip $ADA_CLIP \
     --adalezo_layer_momentum $ADA_MOMENTUM \
     --adalezo_ema_alpha $ADA_ALPHA \
+    --adalezo_gamma $ADA_GAMMA \
     \
     $PEFT_ARGS \
     $TASK_ARGS \
