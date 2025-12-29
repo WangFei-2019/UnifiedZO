@@ -119,14 +119,15 @@ class AdaHiZOOTrainer(AdaLeZOTrainer):
 
         for layer_key in self.current_active_layers:
             prob = self.current_layer_probs_map[layer_key]
+            count = self.current_layer_counts_map[layer_key]
             
             # --- IPW Calculation ---
-            raw_ipw = 1.0 / (prob * len(self.current_active_layers) + 1e-8)
+            raw_ipw = 1.0 / (prob * self.num_active_draws + 1e-8)
             ipw_weight = min(raw_ipw, args.adalezo_ipw_clip)
             
             # Note: HiZOO uses Hessian for adaptive scaling, so we typically 
             # disable 'adalezo_layer_momentum' to avoid double scaling.
-            scale_factor = ipw_weight
+            scale_factor = ipw_weight * count
 
             torch.manual_seed(self.zo_random_seed + layer_key)
             
@@ -147,5 +148,5 @@ class AdaHiZOOTrainer(AdaLeZOTrainer):
 
             # --- Update Bandit Stats ---
             idx = self.sorted_layer_keys.index(layer_key)
-            self.layer_counts[idx] += 1
+            self.layer_counts[idx] += count
             self.layer_avg_rewards[idx] += (step_reward - self.layer_avg_rewards[idx]) / self.layer_counts[idx]
