@@ -55,15 +55,16 @@ class AdaZOAdaMUTrainer(AdaLeZOTrainer):
         # Iterate ONLY over active layers (Sparse Update)
         for layer_key in self.current_active_layers:
             prob = self.current_layer_probs_map[layer_key]
+            count = self.current_layer_counts_map[layer_key]
             
             # --- IPW Calculation ---
             # Standard AdaLeZO IPW with clipping
-            raw_ipw = 1.0 / (prob * len(self.current_active_layers) + 1e-8)
+            raw_ipw = 1.0 / (prob * self.num_active_draws + 1e-8)
             ipw_weight = min(raw_ipw, args.adalezo_ipw_clip)
             
             # Note: We do NOT use adalezo_layer_momentum here because 
             # ZO-AdaMU already handles adaptive scaling via 'v' (second moment).
-            scale_factor = ipw_weight
+            scale_factor = ipw_weight * count
 
             # --- Parameter Update with Adam Logic ---
             # Must use SAME seed as _perturb_active_layers to reproduce 'z'
@@ -101,5 +102,5 @@ class AdaZOAdaMUTrainer(AdaLeZOTrainer):
 
             # --- Update Bandit Stats (Same as AdaLeZO) ---
             idx = self.sorted_layer_keys.index(layer_key)
-            self.layer_counts[idx] += 1
+            self.layer_counts[idx] += count
             self.layer_avg_rewards[idx] += (step_reward - self.layer_avg_rewards[idx]) / self.layer_counts[idx]

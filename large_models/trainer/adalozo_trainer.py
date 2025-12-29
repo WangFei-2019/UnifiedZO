@@ -76,11 +76,13 @@ class AdaLoZOTrainer(AdaLeZOTrainer):
         # Iterate only over active layers
         for layer_key in self.current_active_layers:
             prob = self.current_layer_probs_map[layer_key]
+            count = self.current_layer_counts_map[layer_key]
             
             # --- IPW Calculation (Same as AdaLeZO) ---
-            raw_ipw = 1.0 / (prob * len(self.current_active_layers) + 1e-8)
+            raw_ipw = 1.0 / (prob * self.num_active_draws + 1e-8)
             ipw_weight = min(raw_ipw, args.adalezo_ipw_clip)
-            scale_factor = ipw_weight
+            
+            scale_factor = ipw_weight * count
 
             # Adaptive Layer Momentum logic (Optional)
             if args.adalezo_layer_momentum:
@@ -119,5 +121,5 @@ class AdaLoZOTrainer(AdaLeZOTrainer):
 
             # --- Update Bandit Stats (Same as AdaLeZO) ---
             idx = self.sorted_layer_keys.index(layer_key)
-            self.layer_counts[idx] += 1
+            self.layer_counts[idx] += count
             self.layer_avg_rewards[idx] += (step_reward - self.layer_avg_rewards[idx]) / self.layer_counts[idx]

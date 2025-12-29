@@ -95,10 +95,13 @@ class AdaFZooTrainer(AdaLeZOTrainer):
         # Iterate only over active layers (Sparse Update)
         for layer_key in self.current_active_layers:
             prob = self.current_layer_probs_map[layer_key]
+            count = self.current_layer_counts_map[layer_key]
             
             # --- IPW Calculation ---
-            raw_ipw = 1.0 / (prob * len(self.current_active_layers) + 1e-8)
+            raw_ipw = 1.0 / (prob * self.num_active_draws + 1e-8)
             ipw_weight = min(raw_ipw, args.adalezo_ipw_clip)
+            
+            scale_factor = ipw_weight * count
             
             # Calculate the aggregated update for this layer across all N seeds
             # theta_new = theta - lr * IPW * sum_i ( projected_grad_i * z_i )
@@ -115,8 +118,8 @@ class AdaFZooTrainer(AdaLeZOTrainer):
                     # Accumulate: grad_est += scalar_i * z_i
                     total_grad_est += projected_grads[i] * z
                 
-                # Apply scaling
-                total_grad_est *= ipw_weight
+                # Apply scaling (IPW * Count)
+                total_grad_est *= scale_factor
                 
                 # Update Parameter
                 if args.weight_decay > 0:
@@ -129,5 +132,5 @@ class AdaFZooTrainer(AdaLeZOTrainer):
 
             # --- Update Bandit Stats ---
             idx = self.sorted_layer_keys.index(layer_key)
-            self.layer_counts[idx] += 1
+            self.layer_counts[idx] += count
             self.layer_avg_rewards[idx] += (step_reward - self.layer_avg_rewards[idx]) / self.layer_counts[idx]

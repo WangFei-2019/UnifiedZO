@@ -68,13 +68,14 @@ class AdaPZOTrainer(AdaLeZOTrainer):
         # 5. Calculate Output Difference
         o_diff = o1 - o0
         
-        # Store context in sliding window: (seed, o_diff, active_layers_snapshot, probs_snapshot)
-        # We must snapshot the active layers because they change over time, and we need to know 
-        # which layers were perturbed for this specific history item to reconstruct the gradient correctly.
+        # Store context in sliding window: 
+        # Must store counts and K (num_active_draws) for correct IPW reconstruction later.
         current_active = list(self.current_active_layers)
         current_probs = self.current_layer_probs_map.copy()
+        current_counts = self.current_layer_counts_map.copy() # Store counts
+        k_draws = self.num_active_draws # Store K
         
-        self.sliding_window.append((self.zo_random_seed, o_diff, current_active, current_probs))
+        self.sliding_window.append((self.zo_random_seed, o_diff, current_active, current_probs, current_counts, k_draws))
         
         # 6. Calculate Reward for Bandit (Proxy: abs(loss1 - loss0))
         # This measures the sensitivity of the selected layers for the bandit algorithm.
@@ -101,7 +102,7 @@ class AdaPZOTrainer(AdaLeZOTrainer):
         history_items = [] 
         
         for item in self.sliding_window:
-            seed, o_diff, active, probs = item
+            seed, o_diff, active, probs, counts, k_draws = item
             
             # Align sequence lengths if necessary (truncation logic from PZO)
             if o_diff.shape[0] != self.grad_last.shape[0]: continue
@@ -119,7 +120,7 @@ class AdaPZOTrainer(AdaLeZOTrainer):
             # Compute dot product: <o_diff, grad_last>
             dot = torch.sum(curr_o * curr_g, dim=(-3, -2, -1))
             dot_products.append(dot)
-            history_items.append((seed, active, probs))
+            history_items.append((seed, active, probs, counts, k_draws))
             
         if not dot_products:
             return
@@ -131,7 +132,7 @@ class AdaPZOTrainer(AdaLeZOTrainer):
         # We iterate through history to apply momentum-aggregated updates.
         # Each history item represents a direction 'z' (sparse) that was taken in the past.
         
-        for (coeff, dot, (seed, active_layers, probs_map)) in zip(current_coeffs, dot_products, history_items):
+        for (coeff, dot, (seed, active_layers, probs_map, counts_map, k_draws)) in zip(current_coeffs, dot_products, history_items):
             # Calculate scalar projection value
             project_value = coeff * dot.item() / args.zo_eps
             
@@ -139,9 +140,15 @@ class AdaPZOTrainer(AdaLeZOTrainer):
             for layer_key in active_layers:
                 prob = probs_map[layer_key]
                 
+                # Retrieve count for this specific history step
+                count = counts_map[layer_key]
+
                 # IPW Calculation
-                raw_ipw = 1.0 / (prob * len(active_layers) + 1e-8)
+                raw_ipw = 1.0 / (prob * k_draws + 1e-8)
                 ipw_weight = min(raw_ipw, args.adalezo_ipw_clip)
+                
+                # Apply Count Scaling
+                scale_factor = ipw_weight * count
                 
                 # Regenerate noise 'z' using the stored seed + layer_key
                 torch.manual_seed(seed + layer_key)
@@ -149,8 +156,8 @@ class AdaPZOTrainer(AdaLeZOTrainer):
                 for name, param in self.params_by_layer[layer_key]:
                     z = self.generate_random_noise(param.data.size(), param.data.device, param.data.dtype, args.perturb_type)
                     
-                    # Update Term: projection * z * IPW
-                    update = project_value * z * ipw_weight
+                    # Update Term: projection * z * IPW * Count
+                    update = project_value * z * scale_factor
                     
                     # Apply update (with optional weight decay)
                     if args.weight_decay > 0 and "bias" not in name and "norm" not in name:
@@ -162,7 +169,9 @@ class AdaPZOTrainer(AdaLeZOTrainer):
         # We update the bandit stats based on the *current* step's sensitivity (step_reward).
         for layer_key in self.current_active_layers:
             idx = self.sorted_layer_keys.index(layer_key)
-            self.layer_counts[idx] += 1
+            # Increment by current count
+            count = self.current_layer_counts_map[layer_key]
+            self.layer_counts[idx] += count
             self.layer_avg_rewards[idx] += (step_reward - self.layer_avg_rewards[idx]) / self.layer_counts[idx]
 
     # --------------------------------------------------------------------------

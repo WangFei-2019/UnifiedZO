@@ -16,8 +16,8 @@ class AdaMeZOSVRGTrainer(AdaLeZOTrainer):
         super().__init__(model, args, **kwargs)
         
         # --- SVRG Hyperparameters ---
-        self.svrg_q = getattr(args, "svrg_q", 100)  # Anchor update frequency
-        self.svrg_k = getattr(args, "svrg_k", 1)    # Samples for anchor gradient estimation
+        self.svrg_q = args.svrg_q # Anchor update frequency
+        self.svrg_k = args.svrg_k # Samples for anchor gradient estimation
         
         # --- SVRG State Storage ---
         # Anchor params stored on CPU to save VRAM
@@ -162,14 +162,18 @@ class AdaMeZOSVRGTrainer(AdaLeZOTrainer):
         
         # Iterate over active layers
         for layer_key in active_layers:
+            count = self.current_layer_counts_map[layer_key]
+            
             # Deterministic seed per layer (matching _perturb_active_layers logic)
             torch.manual_seed(step_seed + layer_key)
             
             prob = probs_map[layer_key]
             
             # IPW Weight calculation
-            raw_ipw = 1.0 / (prob * len(active_layers) + 1e-8)
+            raw_ipw = 1.0 / (prob * self.num_active_draws + 1e-8)
             ipw_weight = min(raw_ipw, self.args.adalezo_ipw_clip)
+            
+            scale_factor = ipw_weight * count
             
             for name, param in self.params_by_layer[layer_key]:
                 z = self.generate_random_noise(param.data.size(), param.data.device, param.data.dtype, self.args.perturb_type)
@@ -182,8 +186,8 @@ class AdaMeZOSVRGTrainer(AdaLeZOTrainer):
                 # Variance Reduced Gradient
                 vr_grad = g_curr - g_anchor + mu
                 
-                # Apply IPW Scaling
-                final_grad = vr_grad * ipw_weight
+                # Apply IPW Scaling and Count Multiplier
+                final_grad = vr_grad * scale_factor
                 
                 # Weight Decay
                 if self.args.weight_decay > 0 and "bias" not in name and "layer_norm" not in name:
@@ -199,7 +203,11 @@ class AdaMeZOSVRGTrainer(AdaLeZOTrainer):
         
         for layer_key in active_layers:
             idx = self.sorted_layer_keys.index(layer_key)
-            self.layer_counts[idx] += 1
+            
+            count = self.current_layer_counts_map[layer_key]
+            self.layer_counts[idx] += count
+            
+            # EMA Reward Update
             self.layer_avg_rewards[idx] += (step_reward - self.layer_avg_rewards[idx]) / self.layer_counts[idx]
         
         return loss_curr_1
