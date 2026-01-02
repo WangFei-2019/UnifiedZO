@@ -85,10 +85,10 @@ def profiled_mezo_step(self, model, inputs, num_items_in_batch=None):
 # =============================================================================
 
 def profiled_lozo_step(self, model, inputs, num_items_in_batch=None):
-    """LoZO (Low-Rank ZO) 详细时间分析"""
+    """LoZO (Low-Rank ZO) detailed time profiling"""
     stats = {"perturb": 0.0, "forward": 0.0, "update": 0.0}
     
-    # LoZO V Matrix Update (Per Interval) - 计入 Update 时间
+    # LoZO V Matrix Update (Per Interval) - Counted as Update overhead
     torch.cuda.synchronize()
     t0 = time.perf_counter()
     if self.state.global_step % self.args.lozo_step_interval == 0:
@@ -147,7 +147,7 @@ def profiled_lozo_step(self, model, inputs, num_items_in_batch=None):
     return loss1
 
 def profiled_zo_adamu_step(self, model, inputs, num_items_in_batch=None):
-    """ZO-AdaMU 详细时间分析"""
+    """ZO-AdaMU detailed time profiling"""
     stats = {"perturb": 0.0, "forward": 0.0, "update": 0.0}
     
     self.zo_random_seed = np.random.randint(1000000000)
@@ -200,11 +200,13 @@ def profiled_zo_adamu_step(self, model, inputs, num_items_in_batch=None):
     return loss1
 
 def profiled_fzoo_step(self, model, inputs, num_items_in_batch=None):
-    """FZOO 详细时间分析 (多样本采样)"""
+    """
+    FZOO detailed time profiling (Multi-sample sampling).
+    Logic adjusted to correctly handle multiple seeds and gradient vectors.
+    """
     stats = {"perturb": 0.0, "forward": 0.0, "update": 0.0}
     
-    # FZOO 的逻辑较为特殊，它在 zo_step 内部循环 N 次
-    # 为了准确计时，我们需要拆解 zo_step 的逻辑
+    # FZOO logic involves a loop inside zo_step. We dismantle it here for profiling.
     
     self.rand_values = [torch.rand(1).item() for _ in range(len(self.named_parameters_to_optim))]
     self.zo_random_seeds = []
@@ -252,8 +254,10 @@ def profiled_fzoo_step(self, model, inputs, num_items_in_batch=None):
     loss1s = torch.tensor(loss1s, dtype=torch.float32)
     loss_tensor_cpu = loss_tensor_gpu.cpu()
     std = torch.std(loss1s, unbiased=False)
-    if std == 0 or torch.isnan(std): std = 1.0
-    self.projected_grad = ((loss1s - loss_tensor_cpu) / (perturbTimes * std)).item()
+    if std == 0 or torch.isnan(std): 
+        std = 1.0
+
+    self.projected_grad = ((loss1s - loss_tensor_cpu) / (perturbTimes * std)).tolist()
     
     # === Update ===
     torch.cuda.synchronize()
@@ -266,7 +270,7 @@ def profiled_fzoo_step(self, model, inputs, num_items_in_batch=None):
     return loss_tensor_gpu
 
 def profiled_hizoo_step(self, model, inputs, num_items_in_batch=None):
-    """HiZOO 详细时间分析"""
+    """HiZOO detailed time profiling"""
     stats = {"perturb": 0.0, "forward": 0.0, "update": 0.0}
     
     model.eval()
@@ -314,7 +318,7 @@ def profiled_hizoo_step(self, model, inputs, num_items_in_batch=None):
     torch.cuda.synchronize()
     stats["perturb"] += time.perf_counter() - t0
     
-    # === Hessian Update (视为 Update 的一部分) ===
+    # === Hessian Update (Considered part of Update overhead) ===
     torch.cuda.synchronize()
     t0 = time.perf_counter()
     self._update_hizoo_hessian(loss_orig, loss1, loss2)
@@ -334,7 +338,7 @@ def profiled_hizoo_step(self, model, inputs, num_items_in_batch=None):
     return loss1
 
 def profiled_pzo_step(self, model, inputs, num_items_in_batch=None):
-    """PseuZO (PZO) 详细时间分析"""
+    """PseuZO (PZO) detailed time profiling"""
     stats = {"perturb": 0.0, "forward": 0.0, "update": 0.0}
     
     model.eval()
@@ -394,7 +398,7 @@ def profiled_pzo_step(self, model, inputs, num_items_in_batch=None):
 # =============================================================================
 
 def profiled_adalezo_step(self, model, inputs, num_items_in_batch=None):
-    """AdaLeZO 详细时间分析"""
+    """AdaLeZO detailed time profiling"""
     stats = {"perturb": 0.0, "forward": 0.0, "update": 0.0}
     
     # 1. Active Layer Selection (Overhead -> Update)
@@ -457,31 +461,31 @@ def profiled_adalezo_step(self, model, inputs, num_items_in_batch=None):
 
 def profiled_adalozo_step(self, model, inputs, num_items_in_batch=None):
     """
-    AdaLoZO 详细时间分析。
+    AdaLoZO detailed time profiling.
     """
-    # 1. 测量 V 矩阵更新时间 (归类为 Update 开销)
+    # 1. Measure V Matrix Update time (Categorized as Update overhead)
     v_update_time = 0.0
     torch.cuda.synchronize()
     t0 = time.perf_counter()
     
-    # AdaLoZO 的核心逻辑：周期性更新辅助矩阵
+    # AdaLoZO Core: Periodically update auxiliary matrix
     if self.state.global_step % self.args.lozo_step_interval == 0:
         self._update_lozo_v()
         
     torch.cuda.synchronize()
     v_update_time = time.perf_counter() - t0
 
-    # 2. 调用通用的 AdaLeZO 步骤 (执行 Perturb/Forward/Update)
-    # 这会覆盖 self._last_step_stats
+    # 2. Call generic AdaLeZO step (Handles Perturb/Forward/Update)
+    # This overwrites self._last_step_stats
     loss = profiled_adalezo_step(self, model, inputs, num_items_in_batch)
 
-    # 3. 将 V 矩阵更新时间累加到 "update" 统计中
+    # 3. Add V matrix update time to stats
     self._last_step_stats["update"] += v_update_time
     
     return loss
 
 def profiled_adafzoo_step(self, model, inputs, num_items_in_batch=None):
-    """AdaFZoo 详细时间分析"""
+    """AdaFZoo detailed time profiling"""
     stats = {"perturb": 0.0, "forward": 0.0, "update": 0.0}
     
     # Baseline Loss (Unperturbed)
@@ -548,7 +552,7 @@ def profiled_adafzoo_step(self, model, inputs, num_items_in_batch=None):
     return loss_baseline
 
 def profiled_adahizoo_step(self, model, inputs, num_items_in_batch=None):
-    """AdaHiZOO 详细时间分析"""
+    """AdaHiZOO detailed time profiling"""
     stats = {"perturb": 0.0, "forward": 0.0, "update": 0.0}
     
     self.zo_random_seed = np.random.randint(1000000000)
@@ -598,9 +602,14 @@ def profiled_adahizoo_step(self, model, inputs, num_items_in_batch=None):
     # === Update (Hessian + Params) ===
     torch.cuda.synchronize()
     t0 = time.perf_counter()
+    # Update Hessian estimate first
     self._update_hizoo_hessian(loss_orig, loss1, loss2)
     self.projected_grad = ((loss1 - loss2) / (2 * self.args.zo_eps)).item()
+    
+    # Call _update_adalezo(). In AdaHiZOOTrainer, this method is overridden 
+    # to apply the Hessian preconditioning using self.hizoo_hessian.
     self._update_adalezo()
+    
     if self.state.global_step % self.args.adalezo_interval == 0:
         self._resample_layers()
     torch.cuda.synchronize()
@@ -610,14 +619,14 @@ def profiled_adahizoo_step(self, model, inputs, num_items_in_batch=None):
     return loss1
 
 def profiled_adazoadamu_step(self, model, inputs, num_items_in_batch=None):
-    """AdaZOAdaMU 详细时间分析"""
+    """AdaZOAdaMU detailed time profiling"""
     # Logic is identical to AdaLeZO step structure, but calls _update_adalezo (which is overridden with Adam logic)
     # We can reuse profiled_adalezo_step because the difference is only in the _update_adalezo internal logic,
     # which is already wrapped in the "Update" timing block.
     return profiled_adalezo_step(self, model, inputs, num_items_in_batch)
 
 def profiled_adapzo_step(self, model, inputs, num_items_in_batch=None):
-    """AdaPZO 详细时间分析"""
+    """AdaPZO detailed time profiling"""
     stats = {"perturb": 0.0, "forward": 0.0, "update": 0.0}
     
     # Momentum Schedule (overhead -> update)
@@ -678,7 +687,7 @@ def profiled_adapzo_step(self, model, inputs, num_items_in_batch=None):
     return loss1
 
 def profiled_adadizo_step(self, model, inputs, num_items_in_batch=None):
-    """AdaDiZO 详细时间分析"""
+    """AdaDiZO detailed time profiling"""
     # AdaDiZO calls super().training_step() (which is AdaLeZO logic)
     # Then periodically calls dizo_step().
     # We wrap this manually.
