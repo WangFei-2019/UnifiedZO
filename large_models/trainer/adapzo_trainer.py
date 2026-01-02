@@ -215,7 +215,7 @@ class AdaPZOTrainer(AdaLeZOTrainer):
         """
         Updates the momentum decay factor based on a cyclic schedule.
         """
-        epoch = self.state.epoch
+        epoch = self.state.epoch if self.state.epoch is not None else 0
         num_train_epochs = self.state.num_train_epochs if self.state.num_train_epochs is not None else 1
         
         def cyclic_hyperbola(t, T, k):

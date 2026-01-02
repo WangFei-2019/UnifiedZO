@@ -175,7 +175,7 @@ class PZOTrainer(BaseZOTrainer):
     # --- Momentum Scheduling Logic (Ported from original PseuZO) ---
 
     def _update_momentum_coefficient(self):
-        epoch = self.state.epoch
+        epoch = self.state.epoch if self.state.epoch is not None else 0
         num_train_epochs = self.state.num_train_epochs if self.state.num_train_epochs is not None else 1
         
         # Example scheduler: Cyclic Hyperbola
