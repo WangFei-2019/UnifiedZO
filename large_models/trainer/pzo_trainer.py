@@ -136,7 +136,7 @@ class PZOTrainer(BaseZOTrainer):
 
     def pzo_forward(self, model, inputs, need_grad=False):
         """
-        Modified PZO forward for UnifiedZO compatibility.
+        PZO forward for UnifiedZO compatibility.
         """
         model.eval()
         with torch.no_grad():

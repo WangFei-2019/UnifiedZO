@@ -55,8 +55,8 @@ class AdaMeZOSVRGTrainer(AdaLeZOTrainer):
 
     def _update_anchor(self, model, inputs):
         """
-        Updates the anchor model (\tilde{w}) and calculates the reference gradient (\mu).
-        Note: We compute \mu for ALL parameters because any layer might be selected 
+        Updates the anchor model (\\tilde{w}) and calculates the reference gradient (\\mu).
+        Note: We compute \\mu for ALL parameters because any layer might be selected 
         by the Bandit in future steps.
         """
         logger.info(f"[AdaMeZO-SVRG] Updating anchor at step {self.state.global_step}...")

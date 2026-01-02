@@ -10,9 +10,9 @@ from transformers.utils import logging
 
 logger = logging.get_logger(__name__)
 
-class AdaLeZOTrainer(BaseZOTrainer):
+class AdaLeZOAdvTrainer(BaseZOTrainer):
     """
-    Implementation of AdaLeZO (Adaptive Layer-wise Zeroth-Order Optimization) with REPLACEMENT sampling.
+    Implementation of AdaLeZO-Adv (Adaptive Layer-wise Zeroth-Order Optimization with Advantage Estimation) with REPLACEMENT sampling.
     
     Mechanism:
     1. Divides parameters into groups (layers).
@@ -69,9 +69,14 @@ class AdaLeZOTrainer(BaseZOTrainer):
         # --- Bandit Statistics ---
         # N_i: Selection counts (kept for logging/analysis)
         self.layer_counts = torch.zeros(self.num_layers, device=self.args.device)
-        # Q_i: Average reward (gradient magnitude)
+        # Q_i: Average reward (now represents standardized Advantage)
         self.layer_avg_rewards = torch.zeros(self.num_layers, device=self.args.device)
-        
+
+        # Used to implement Reward Scaling (div by std) and Baseline Subtraction (sub mean)
+        self.global_reward_mean = 0.0
+        self.global_reward_var = 1.0
+        self.reward_stats_decay = 0.99  # Beta for EMA of statistics (e.g., 0.99 or 0.999)
+
         # Initialize Probabilities
         if self.args.adalezo_warm_start:
             # Warm start: Bias towards deeper layers (last 40%)
@@ -85,7 +90,7 @@ class AdaLeZOTrainer(BaseZOTrainer):
             # Uniform initialization
             self.layer_probs = torch.ones(self.num_layers, device=self.args.device) / self.num_layers
 
-        # Adaptive Scaling State (RMSProp-like)
+        # Adaptive Scaling State (RMSProp-like) for parameter updates
         if self.args.adalezo_layer_momentum:
             self.layer_sq_grads = torch.zeros(self.num_layers, device=self.args.device) 
 
@@ -97,12 +102,14 @@ class AdaLeZOTrainer(BaseZOTrainer):
         k = max(1, int(self.args.adalezo_k_ratio * self.num_layers))
         self.num_active_draws = k
         
-        # Normalize rewards for numerical stability
-        max_reward = self.layer_avg_rewards.max()
-        # Use rewards directly as scores (Exploitation)
-        scores = self.layer_avg_rewards / max_reward if max_reward > 1e-6 else self.layer_avg_rewards
+        # Since we now use Reward Scaling (standardization), layer_avg_rewards are already roughly N(0,1).
+        # We REMOVED the 'scores = rewards / max_reward' step because:
+        # 1. 'max_reward' might be negative if we subtract baseline.
+        # 2. The rewards are already normalized by global variance, so explicit scaling is redundant.
+        scores = self.layer_avg_rewards
         
         # Convert scores to probabilities via Softmax (Temperature controlled)
+        # Softmax works fine with negative scores (which occur due to Baseline Subtraction)
         self.layer_probs = torch.nn.functional.softmax(scores / self.args.adalezo_tau, dim=0)
 
         # Mix with uniform distribution to ensure exploration (Gamma Mixing)
@@ -190,7 +197,31 @@ class AdaLeZOTrainer(BaseZOTrainer):
         args = self.args
         lr = self._get_learning_rate()
         
-        step_reward = abs(self.projected_grad)
+        # Raw reward signal: Magnitude of the projected gradient
+        raw_step_reward = abs(self.projected_grad)
+
+        if self.state.global_step <= 1:
+            self.global_reward_mean = raw_step_reward
+            self.global_reward_var = 0.0 # Initial variance
+        else:
+            # Update Mean (Baseline)
+            self.global_reward_mean = (self.reward_stats_decay * self.global_reward_mean) + \
+                                      (1 - self.reward_stats_decay) * raw_step_reward
+            
+            # Update Variance (Approximate EMA of squared diff)
+            diff = raw_step_reward - self.global_reward_mean
+            self.global_reward_var = (self.reward_stats_decay * self.global_reward_var) + \
+                                     (1 - self.reward_stats_decay) * (diff ** 2)
+
+        # Reward Scaling: Divide by standard deviation
+        reward_std = math.sqrt(self.global_reward_var) + 1e-8
+        
+        # Baseline Subtraction: Subtract mean
+        # Strategy: (Reward - Baseline) / Scale
+        normalized_reward = (raw_step_reward - self.global_reward_mean) / reward_std
+
+        # Clipping: Prevent outliers from destabilizing the Bandit
+        normalized_reward = max(min(normalized_reward, 3.0), -3.0)
 
         # Iterate only over UNIQUE active layers
         for layer_key in self.current_active_layers:
@@ -198,9 +229,7 @@ class AdaLeZOTrainer(BaseZOTrainer):
             count = self.current_layer_counts_map[layer_key] # Number of times selected
             
             # --- IPW Calculation (With Replacement) ---
-            # Unbiased Estimator Formula: 
-            # Update = Sum_{j=1 to k} [ I(layer selected at j) * (g / (k * p)) ]
-            #        = count * (g / (k * p))
+            # Unbiased Estimator Formula: Update ~ count * (g / (k * p))
             
             # Denominator uses Total Draws (k), not unique count
             raw_ipw = 1.0 / (prob * self.num_active_draws + 1e-8)
@@ -239,14 +268,14 @@ class AdaLeZOTrainer(BaseZOTrainer):
                 else:
                     param.data.add_(update_term, alpha=-lr)
 
-            # --- Update Bandit Stats ---
-            # We update the stats ONCE per step per layer, regardless of 'count'.
-            # Reason: The gradient signal 'step_reward' is observed only once this step.
+            # --- Update Bandit Stats (Using Normalized Reward) ---
+            # We update the stats ONCE per step per layer.
             idx = self.sorted_layer_keys.index(layer_key)
             self.layer_counts[idx] += count # Track total allocated budget
             
-            # EMA Update
-            self.layer_avg_rewards[idx] = (1 - args.adalezo_ema_alpha) * self.layer_avg_rewards[idx] + args.adalezo_ema_alpha * step_reward
+            # EMA Update using the Normalized Reward instead of raw step_reward
+            self.layer_avg_rewards[idx] = (1 - args.adalezo_ema_alpha) * self.layer_avg_rewards[idx] + \
+                                          args.adalezo_ema_alpha * normalized_reward
 
     def _log_probs(self):
         """
@@ -259,7 +288,9 @@ class AdaLeZOTrainer(BaseZOTrainer):
             "probs": self.layer_probs.detach().cpu().tolist(),
             "active": self.current_active_layers,
             "counts": dict(self.current_layer_counts_map), # Log counts for debug
-            "normalized_rewards": self.layer_avg_rewards.detach().cpu().tolist(), 
+            "normalized_rewards": self.layer_avg_rewards.detach().cpu().tolist(),
+            "global_mean": self.global_reward_mean,
+            "global_var": self.global_reward_var
         }
         
         # Save to output dir
