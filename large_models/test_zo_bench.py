@@ -80,9 +80,634 @@ def profiled_mezo_step(self, model, inputs, num_items_in_batch=None):
     self._last_step_stats = stats
     return loss1
 
-# If LoZO or other methods are needed, add similar functions following the logic above
-# Example: profiled_lozo_step ...
+# =============================================================================
+# Additional Profiled Step Functions for UnifiedZO Methods
+# =============================================================================
 
+def profiled_lozo_step(self, model, inputs, num_items_in_batch=None):
+    """LoZO (Low-Rank ZO) 详细时间分析"""
+    stats = {"perturb": 0.0, "forward": 0.0, "update": 0.0}
+    
+    # LoZO V Matrix Update (Per Interval) - 计入 Update 时间
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    if self.state.global_step % self.args.lozo_step_interval == 0:
+        self._update_lozo_v()
+    torch.cuda.synchronize()
+    stats["update"] += time.perf_counter() - t0
+
+    self.zo_random_seed = np.random.randint(1000000000)
+    
+    # === Perturb (+) ===
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    self._perturb_lozo(scaling_factor=1)
+    torch.cuda.synchronize()
+    stats["perturb"] += time.perf_counter() - t0
+    
+    # === Forward (+) ===
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    loss1 = self.zo_forward(model, inputs)
+    torch.cuda.synchronize()
+    stats["forward"] += time.perf_counter() - t0
+    
+    # === Perturb (-) ===
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    self._perturb_lozo(scaling_factor=-2) # +1 -> -1
+    torch.cuda.synchronize()
+    stats["perturb"] += time.perf_counter() - t0
+    
+    # === Forward (-) ===
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    loss2 = self.zo_forward(model, inputs)
+    torch.cuda.synchronize()
+    stats["forward"] += time.perf_counter() - t0
+    
+    # Gradient Estimate Calculation
+    self.projected_grad = ((loss1 - loss2) / (2 * self.args.zo_eps)).item()
+    
+    # === Restore (+) ===
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    self._perturb_lozo(scaling_factor=1) # -1 -> 0
+    torch.cuda.synchronize()
+    stats["perturb"] += time.perf_counter() - t0
+    
+    # === Update ===
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    self._update_lozo()
+    torch.cuda.synchronize()
+    stats["update"] += time.perf_counter() - t0
+    
+    self._last_step_stats = stats
+    return loss1
+
+def profiled_zo_adamu_step(self, model, inputs, num_items_in_batch=None):
+    """ZO-AdaMU 详细时间分析"""
+    stats = {"perturb": 0.0, "forward": 0.0, "update": 0.0}
+    
+    self.zo_random_seed = np.random.randint(1000000000)
+    
+    # === Perturb (+) ===
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    self._perturb_parameters(scaling_factor=1)
+    torch.cuda.synchronize()
+    stats["perturb"] += time.perf_counter() - t0
+    
+    # === Forward (+) ===
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    loss1 = self.zo_forward(model, inputs)
+    torch.cuda.synchronize()
+    stats["forward"] += time.perf_counter() - t0
+    
+    # === Perturb (-) ===
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    self._perturb_parameters(scaling_factor=-2)
+    torch.cuda.synchronize()
+    stats["perturb"] += time.perf_counter() - t0
+    
+    # === Forward (-) ===
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    loss2 = self.zo_forward(model, inputs)
+    torch.cuda.synchronize()
+    stats["forward"] += time.perf_counter() - t0
+    
+    self.projected_grad = ((loss1 - loss2) / (2 * self.args.zo_eps)).item()
+
+    # === Restore (+) ===
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    self._perturb_parameters(scaling_factor=1)
+    torch.cuda.synchronize()
+    stats["perturb"] += time.perf_counter() - t0
+    
+    # === Update ===
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    self._update_zoadamu()
+    torch.cuda.synchronize()
+    stats["update"] += time.perf_counter() - t0
+    
+    self._last_step_stats = stats
+    return loss1
+
+def profiled_fzoo_step(self, model, inputs, num_items_in_batch=None):
+    """FZOO 详细时间分析 (多样本采样)"""
+    stats = {"perturb": 0.0, "forward": 0.0, "update": 0.0}
+    
+    # FZOO 的逻辑较为特殊，它在 zo_step 内部循环 N 次
+    # 为了准确计时，我们需要拆解 zo_step 的逻辑
+    
+    self.rand_values = [torch.rand(1).item() for _ in range(len(self.named_parameters_to_optim))]
+    self.zo_random_seeds = []
+    loss1s = []
+    perturbTimes = self.N if self.losses is None else (self.N // 2)
+    
+    # === Loop for N Perturbations ===
+    for i in range(perturbTimes):
+        self.zo_random_seed = np.random.randint(1000000000)
+        self.zo_random_seeds.append(self.zo_random_seed)
+        
+        # Perturb
+        torch.cuda.synchronize()
+        t0 = time.perf_counter()
+        self.zo_perturb_parameters(scaling_factor=1)
+        torch.cuda.synchronize()
+        stats["perturb"] += time.perf_counter() - t0
+        
+        # Forward
+        torch.cuda.synchronize()
+        t0 = time.perf_counter()
+        with torch.no_grad():
+            loss1 = self.zo_forward(model, inputs).detach()
+        torch.cuda.synchronize()
+        stats["forward"] += time.perf_counter() - t0
+        
+        loss1s.append(loss1)
+        
+        # Restore
+        torch.cuda.synchronize()
+        t0 = time.perf_counter()
+        self.zo_perturb_parameters(scaling_factor=-1)
+        torch.cuda.synchronize()
+        stats["perturb"] += time.perf_counter() - t0
+
+    # Baseline Loss (Unperturbed)
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    with torch.no_grad():
+        loss_tensor_gpu = self.zo_forward(model, inputs).detach()
+    torch.cuda.synchronize()
+    stats["forward"] += time.perf_counter() - t0
+    
+    # Stats Calculation
+    loss1s = torch.tensor(loss1s, dtype=torch.float32)
+    loss_tensor_cpu = loss_tensor_gpu.cpu()
+    std = torch.std(loss1s, unbiased=False)
+    if std == 0 or torch.isnan(std): std = 1.0
+    self.projected_grad = ((loss1s - loss_tensor_cpu) / (perturbTimes * std)).item()
+    
+    # === Update ===
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    self.zo_update(model)
+    torch.cuda.synchronize()
+    stats["update"] += time.perf_counter() - t0
+    
+    self._last_step_stats = stats
+    return loss_tensor_gpu
+
+def profiled_hizoo_step(self, model, inputs, num_items_in_batch=None):
+    """HiZOO 详细时间分析"""
+    stats = {"perturb": 0.0, "forward": 0.0, "update": 0.0}
+    
+    model.eval()
+    self.zo_random_seed = np.random.randint(1000000000)
+    
+    # === Forward (Original) ===
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    loss_orig = self.zo_forward(model, inputs)
+    torch.cuda.synchronize()
+    stats["forward"] += time.perf_counter() - t0
+    
+    # === Perturb (+) ===
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    self._perturb_hizoo(scaling_factor=1)
+    torch.cuda.synchronize()
+    stats["perturb"] += time.perf_counter() - t0
+    
+    # === Forward (+) ===
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    loss1 = self.zo_forward(model, inputs)
+    torch.cuda.synchronize()
+    stats["forward"] += time.perf_counter() - t0
+    
+    # === Perturb (-) ===
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    self._perturb_hizoo(scaling_factor=-2)
+    torch.cuda.synchronize()
+    stats["perturb"] += time.perf_counter() - t0
+    
+    # === Forward (-) ===
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    loss2 = self.zo_forward(model, inputs)
+    torch.cuda.synchronize()
+    stats["forward"] += time.perf_counter() - t0
+    
+    # === Restore (+) ===
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    self._perturb_hizoo(scaling_factor=1)
+    torch.cuda.synchronize()
+    stats["perturb"] += time.perf_counter() - t0
+    
+    # === Hessian Update (视为 Update 的一部分) ===
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    self._update_hizoo_hessian(loss_orig, loss1, loss2)
+    torch.cuda.synchronize()
+    stats["update"] += time.perf_counter() - t0
+
+    self.projected_grad = ((loss1 - loss2) / (2 * self.args.zo_eps)).item()
+    
+    # === Parameter Update ===
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    self._update_hizoo()
+    torch.cuda.synchronize()
+    stats["update"] += time.perf_counter() - t0
+    
+    self._last_step_stats = stats
+    return loss1
+
+def profiled_pzo_step(self, model, inputs, num_items_in_batch=None):
+    """PseuZO (PZO) 详细时间分析"""
+    stats = {"perturb": 0.0, "forward": 0.0, "update": 0.0}
+    
+    model.eval()
+    
+    # Momentum Schedule (overhead -> update)
+    self._update_momentum_coefficient()
+
+    # === Forward 0 (Gradient Retrieval) ===
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    loss0, o0, grad_last = self.pzo_forward(model, inputs, need_grad=True)
+    self.grad_last = grad_last[0] if isinstance(grad_last, tuple) else grad_last 
+    torch.cuda.synchronize()
+    stats["forward"] += time.perf_counter() - t0
+
+    # Seed
+    seed = np.random.randint(1e9)
+    self.zo_random_seed = seed
+    
+    # === Perturb (+) ===
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    self._perturb_mezo(1)
+    torch.cuda.synchronize()
+    stats["perturb"] += time.perf_counter() - t0
+    
+    # === Forward 1 (State Retrieval) ===
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    loss1, o1, _ = self.pzo_forward(model, inputs, need_grad=False)
+    torch.cuda.synchronize()
+    stats["forward"] += time.perf_counter() - t0
+    
+    # === Restore (-) ===
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    self._perturb_mezo(-1)
+    torch.cuda.synchronize()
+    stats["perturb"] += time.perf_counter() - t0
+    
+    # Window Update
+    o_diff = o1 - o0
+    self.sliding_window.append((seed, o_diff))
+    
+    # === Update ===
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    self._update_pzo()
+    torch.cuda.synchronize()
+    stats["update"] += time.perf_counter() - t0
+    
+    self._last_step_stats = stats
+    return loss1
+
+# =============================================================================
+# Additional Profiled Step Functions for Ada-Series Methods
+# =============================================================================
+
+def profiled_adalezo_step(self, model, inputs, num_items_in_batch=None):
+    """AdaLeZO 详细时间分析"""
+    stats = {"perturb": 0.0, "forward": 0.0, "update": 0.0}
+    
+    # 1. Active Layer Selection (Overhead -> Update)
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    if self.state.global_step % self.args.adalezo_interval == 0 and self.state.global_step > 0:
+        self._resample_layers()
+    torch.cuda.synchronize()
+    stats["update"] += time.perf_counter() - t0
+
+    self.zo_random_seed = np.random.randint(1000000000)
+    
+    # === Perturb (+) ===
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    self._perturb_active_layers(scaling_factor=1)
+    torch.cuda.synchronize()
+    stats["perturb"] += time.perf_counter() - t0
+    
+    # === Forward (+) ===
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    loss1 = self.zo_forward(model, inputs)
+    torch.cuda.synchronize()
+    stats["forward"] += time.perf_counter() - t0
+    
+    # === Perturb (-) ===
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    self._perturb_active_layers(scaling_factor=-2) # +1 -> -1
+    torch.cuda.synchronize()
+    stats["perturb"] += time.perf_counter() - t0
+    
+    # === Forward (-) ===
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    loss2 = self.zo_forward(model, inputs)
+    torch.cuda.synchronize()
+    stats["forward"] += time.perf_counter() - t0
+    
+    # Gradient Estimate
+    self.projected_grad = ((loss1 - loss2) / (2 * self.args.zo_eps)).item()
+    
+    # === Restore (+) ===
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    self._perturb_active_layers(scaling_factor=1) # -1 -> 0
+    torch.cuda.synchronize()
+    stats["perturb"] += time.perf_counter() - t0
+    
+    # === Update (IPW + Bandit Stats) ===
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    self._update_adalezo()
+    torch.cuda.synchronize()
+    stats["update"] += time.perf_counter() - t0
+    
+    self._last_step_stats = stats
+    return loss1
+
+def profiled_adalozo_step(self, model, inputs, num_items_in_batch=None):
+    """
+    AdaLoZO 详细时间分析。
+    """
+    # 1. 测量 V 矩阵更新时间 (归类为 Update 开销)
+    v_update_time = 0.0
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    
+    # AdaLoZO 的核心逻辑：周期性更新辅助矩阵
+    if self.state.global_step % self.args.lozo_step_interval == 0:
+        self._update_lozo_v()
+        
+    torch.cuda.synchronize()
+    v_update_time = time.perf_counter() - t0
+
+    # 2. 调用通用的 AdaLeZO 步骤 (执行 Perturb/Forward/Update)
+    # 这会覆盖 self._last_step_stats
+    loss = profiled_adalezo_step(self, model, inputs, num_items_in_batch)
+
+    # 3. 将 V 矩阵更新时间累加到 "update" 统计中
+    self._last_step_stats["update"] += v_update_time
+    
+    return loss
+
+def profiled_adafzoo_step(self, model, inputs, num_items_in_batch=None):
+    """AdaFZoo 详细时间分析"""
+    stats = {"perturb": 0.0, "forward": 0.0, "update": 0.0}
+    
+    # Baseline Loss (Unperturbed)
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    with torch.inference_mode():
+        loss_baseline = self.zo_forward(model, inputs)
+        loss_baseline_val = loss_baseline.detach().cpu().item()
+    torch.cuda.synchronize()
+    stats["forward"] += time.perf_counter() - t0
+    
+    losses = []
+    seeds = []
+    
+    # N Perturbations Loop
+    for i in range(self.N):
+        seed = np.random.randint(1000000000)
+        seeds.append(seed)
+        self.zo_random_seed = seed
+        
+        # Perturb (+)
+        torch.cuda.synchronize()
+        t0 = time.perf_counter()
+        self._perturb_active_layers(scaling_factor=1)
+        torch.cuda.synchronize()
+        stats["perturb"] += time.perf_counter() - t0
+        
+        # Forward
+        torch.cuda.synchronize()
+        t0 = time.perf_counter()
+        loss = self.zo_forward(model, inputs)
+        losses.append(loss.detach().cpu().item())
+        torch.cuda.synchronize()
+        stats["forward"] += time.perf_counter() - t0
+        
+        # Restore (-)
+        torch.cuda.synchronize()
+        t0 = time.perf_counter()
+        self._perturb_active_layers(scaling_factor=-1)
+        torch.cuda.synchronize()
+        stats["perturb"] += time.perf_counter() - t0
+
+    # Gradient Calculation (CPU overhead -> Update)
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    losses_tensor = torch.tensor(losses, dtype=torch.float32)
+    std = torch.std(losses_tensor, unbiased=False).item()
+    if std == 0 or np.isnan(std): std = 1.0
+    projected_grads = (losses_tensor - loss_baseline_val) / (self.N * std)
+    torch.cuda.synchronize()
+    stats["update"] += time.perf_counter() - t0
+    
+    # === Update ===
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    self._update_adafzoo(projected_grads, seeds)
+    # Resample check
+    if self.state.global_step % self.args.adalezo_interval == 0:
+        self._resample_layers()
+    torch.cuda.synchronize()
+    stats["update"] += time.perf_counter() - t0
+
+    self._last_step_stats = stats
+    return loss_baseline
+
+def profiled_adahizoo_step(self, model, inputs, num_items_in_batch=None):
+    """AdaHiZOO 详细时间分析"""
+    stats = {"perturb": 0.0, "forward": 0.0, "update": 0.0}
+    
+    self.zo_random_seed = np.random.randint(1000000000)
+    
+    # Original Forward
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    loss_orig = self.zo_forward(model, inputs)
+    torch.cuda.synchronize()
+    stats["forward"] += time.perf_counter() - t0
+    
+    # Perturb (+)
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    self._perturb_active_layers(scaling_factor=1)
+    torch.cuda.synchronize()
+    stats["perturb"] += time.perf_counter() - t0
+    
+    # Forward (+)
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    loss1 = self.zo_forward(model, inputs)
+    torch.cuda.synchronize()
+    stats["forward"] += time.perf_counter() - t0
+    
+    # Perturb (-)
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    self._perturb_active_layers(scaling_factor=-2)
+    torch.cuda.synchronize()
+    stats["perturb"] += time.perf_counter() - t0
+    
+    # Forward (-)
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    loss2 = self.zo_forward(model, inputs)
+    torch.cuda.synchronize()
+    stats["forward"] += time.perf_counter() - t0
+    
+    # Restore (+)
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    self._perturb_active_layers(scaling_factor=1)
+    torch.cuda.synchronize()
+    stats["perturb"] += time.perf_counter() - t0
+    
+    # === Update (Hessian + Params) ===
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    self._update_hizoo_hessian(loss_orig, loss1, loss2)
+    self.projected_grad = ((loss1 - loss2) / (2 * self.args.zo_eps)).item()
+    self._update_adalezo()
+    if self.state.global_step % self.args.adalezo_interval == 0:
+        self._resample_layers()
+    torch.cuda.synchronize()
+    stats["update"] += time.perf_counter() - t0
+    
+    self._last_step_stats = stats
+    return loss1
+
+def profiled_adazoadamu_step(self, model, inputs, num_items_in_batch=None):
+    """AdaZOAdaMU 详细时间分析"""
+    # Logic is identical to AdaLeZO step structure, but calls _update_adalezo (which is overridden with Adam logic)
+    # We can reuse profiled_adalezo_step because the difference is only in the _update_adalezo internal logic,
+    # which is already wrapped in the "Update" timing block.
+    return profiled_adalezo_step(self, model, inputs, num_items_in_batch)
+
+def profiled_adapzo_step(self, model, inputs, num_items_in_batch=None):
+    """AdaPZO 详细时间分析"""
+    stats = {"perturb": 0.0, "forward": 0.0, "update": 0.0}
+    
+    # Momentum Schedule (overhead -> update)
+    self._update_momentum_coefficient()
+
+    # Forward 0 (Gradient Retrieval)
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    loss0, o0, grad_last = self.pzo_forward(model, inputs, need_grad=True)
+    self.grad_last = grad_last[0] if isinstance(grad_last, tuple) else grad_last
+    torch.cuda.synchronize()
+    stats["forward"] += time.perf_counter() - t0
+    
+    self.zo_random_seed = np.random.randint(1000000000)
+    
+    # Perturb (+)
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    self._perturb_active_layers(scaling_factor=1)
+    torch.cuda.synchronize()
+    stats["perturb"] += time.perf_counter() - t0
+    
+    # Forward 1 (State Retrieval)
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    loss1, o1, _ = self.pzo_forward(model, inputs, need_grad=False)
+    torch.cuda.synchronize()
+    stats["forward"] += time.perf_counter() - t0
+    
+    # Restore (-)
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    self._perturb_active_layers(scaling_factor=-1)
+    torch.cuda.synchronize()
+    stats["perturb"] += time.perf_counter() - t0
+    
+    # === Update (History + Params) ===
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    o_diff = o1 - o0
+    
+    # Store context
+    current_active = list(self.current_active_layers)
+    current_probs = self.current_layer_probs_map.copy()
+    current_counts = self.current_layer_counts_map.copy()
+    k_draws = self.num_active_draws
+    self.sliding_window.append((self.zo_random_seed, o_diff, current_active, current_probs, current_counts, k_draws))
+    
+    step_reward = abs((loss1 - loss0).item())
+    self._update_adapzo(step_reward)
+    
+    if self.state.global_step % self.args.adalezo_interval == 0:
+        self._resample_layers()
+    torch.cuda.synchronize()
+    stats["update"] += time.perf_counter() - t0
+
+    self._last_step_stats = stats
+    return loss1
+
+def profiled_adadizo_step(self, model, inputs, num_items_in_batch=None):
+    """AdaDiZO 详细时间分析"""
+    # AdaDiZO calls super().training_step() (which is AdaLeZO logic)
+    # Then periodically calls dizo_step().
+    # We wrap this manually.
+    
+    # 1. Run Standard AdaLeZO Step Profile
+    loss = profiled_adalezo_step(self, model, inputs, num_items_in_batch)
+    
+    # Retrieve stats from the inner call
+    stats = self._last_step_stats
+    
+    # 2. Periodic DiZO Projection
+    if self.state.global_step > 0 and self.state.global_step % self.dizo_interval == 0:
+        torch.cuda.synchronize()
+        t0 = time.perf_counter()
+        
+        # Note: dizo_step involves multiple perturbations and forwards internally.
+        # Ideally, we should profile dizo_step internals too, but for high-level summary,
+        # we can categorize the entire projection overhead as "Update" (constraint update)
+        # or split it if strict accuracy is needed. 
+        # Given it's a periodic "correction", putting it in Update/Overhead is acceptable.
+        self.dizo_step(model, inputs)
+        
+        torch.cuda.synchronize()
+        stats["update"] += time.perf_counter() - t0
+        
+        # Update stats
+        self._last_step_stats = stats
+
+    return loss
 # =============================================================================
 # Mocking Data
 # =============================================================================
@@ -167,17 +792,42 @@ def main_test(
         train_dataset=DummyDataset(length=100), tokenizer=tokenizer, data_collator=lambda x: x
     )
 
-    # [FIX] Manually initialize optimizer/scheduler to avoid 'NoneType' error
+    # Manually initialize optimizer/scheduler to avoid 'NoneType' error
     trainer.create_optimizer()
     trainer.create_scheduler(num_training_steps=steps)
 
-    # [FIX] Monkey Patch: Inject the profiled training_step
+    # Monkey Patch: Inject the profiled training_step
+    print(f"Injecting Profiled Step for method: {method}...")
+    
     if method == "mezo":
-        print("Injecting Profiled MeZO Step...")
         trainer.training_step = types.MethodType(profiled_mezo_step, trainer)
+    elif method == "lozo":
+        trainer.training_step = types.MethodType(profiled_lozo_step, trainer)
+    elif method == "zo_adamu":
+        trainer.training_step = types.MethodType(profiled_zo_adamu_step, trainer)
+    elif method == "fzoo":
+        trainer.training_step = types.MethodType(profiled_fzoo_step, trainer)
+    elif method == "hizoo":
+        trainer.training_step = types.MethodType(profiled_hizoo_step, trainer)
+    elif method == "pzo":
+        trainer.training_step = types.MethodType(profiled_pzo_step, trainer)
+    # --- Ada Series ---
+    elif method == "adalezo":
+        trainer.training_step = types.MethodType(profiled_adalezo_step, trainer)
+    elif method == "adalozo":
+        trainer.training_step = types.MethodType(profiled_adalozo_step, trainer)
+    elif method == "adafzoo":
+        trainer.training_step = types.MethodType(profiled_adafzoo_step, trainer)
+    elif method == "adahizoo":
+        trainer.training_step = types.MethodType(profiled_adahizoo_step, trainer)
+    elif method == "adazoadamu":
+        trainer.training_step = types.MethodType(profiled_adazoadamu_step, trainer)
+    elif method == "adapzo":
+        trainer.training_step = types.MethodType(profiled_adapzo_step, trainer)
+    elif method == "adadizo":
+        trainer.training_step = types.MethodType(profiled_adadizo_step, trainer)
     else:
         print(f"Warning: Profiled step not implemented for {method}. Using default (no detailed breakdown).")
-        # If needed, implement similar profiled_xxx_step for lozo, zo_adamu, etc. here
 
     # Forward wrappers setup
     if not hasattr(model, 'original_forward'): model.original_forward = model.forward
