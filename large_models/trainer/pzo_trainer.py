@@ -21,6 +21,9 @@ class PZOTrainer(BaseZOTrainer):
         self.momentum_fb_max = 1.0 
         self.grad_last = None
         
+        # State to track epoch changes for momentum update (Fix: Added state tracking)
+        self.last_epoch_update = -1
+        
         # Init coefficients list
         # We start with max momentum
         self.reset_momentum_fb(self.momentum_fb_max)
@@ -36,7 +39,6 @@ class PZOTrainer(BaseZOTrainer):
         model.eval()
         
         # --- 1. Dynamic Momentum Scheduling ---
-        # Corrected: Ensure this behaves like epoch-wise scheduling
         self._update_momentum_coefficient()
 
         # --- 2. Get Gradient on Unperturbed model (and state o0) ---
@@ -200,6 +202,11 @@ class PZOTrainer(BaseZOTrainer):
         # FIX: Use integer epoch to match original behavior (step-wise schedule per epoch)
         # self.state.epoch is float (e.g., 0.1, 0.2). Cast to int.
         epoch = int(self.state.epoch) if self.state.epoch is not None else 0
+    
+        if epoch == self.last_epoch_update:
+            return
+        self.last_epoch_update = epoch
+
         num_train_epochs = self.state.num_train_epochs if self.state.num_train_epochs is not None else 1
         
         def cyclic_hyperbola(t, T, k):
@@ -229,6 +236,8 @@ class PZOTrainer(BaseZOTrainer):
         
         # CRITICAL FIX: Clear sliding window if momentum resets to max (Cycle Restart)
         # Original code: if self.momentum_fb == self.momentum_fb_max: ... deque(maxlen=...)
+        # Because we now only call this once per epoch, this correctly clears 
+        # the window only at the start of a new cycle (when momentum jumps back to max).
         if self.momentum_fb == self.momentum_fb_max:
              self.sliding_window = deque(maxlen=self.args.sliding_window_length)
              # logger.info(f"PZO: Momentum reset to max ({self.momentum_fb}), sliding window cleared.")
