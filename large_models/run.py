@@ -256,7 +256,7 @@ def main():
                     model.original_forward = model.forward
 
                 if args.trainer == "pzo" or args.trainer == "adapzo":
-                    if getattr(args, 'logits', False):
+                    if args.logits:
                         from trainer.utils import forward_wrap_with_option_len_pzo_logits
                         model.forward = forward_wrap_with_option_len_pzo_logits.__get__(model, type(model))
                     else:

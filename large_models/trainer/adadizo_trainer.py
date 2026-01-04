@@ -21,12 +21,12 @@ class AdaDiZOTrainer(AdaLeZOTrainer):
         super().__init__(model, args, **kwargs)
         
         # --- DiZO Initialization ---
-        self.dizo_interval = getattr(args, "dizo_interval", 100)
-        self.dizo_iters = getattr(args, "dizo_iters", 5)
-        self.zo_eps_proj = getattr(args, "zo_eps_projection", 1e-3)
-        self.step_size_proj = getattr(args, "step_size_projection", 0.1)
-        self.clip_range = getattr(args, "clip_range", 1e-4)
-        self.norm_mode = getattr(args, "norm_mode", "l2")
+        self.dizo_interval = args.dizo_interval
+        self.dizo_iters = args.dizo_iters
+        self.zo_eps_proj = args.zo_eps_projection
+        self.step_size_proj = args.step_size_projection
+        self.clip_range = args.clip_range
+        self.norm_mode = args.norm_mode
 
         logger.info("Initializing AdaDiZO: Creating anchor model for projection...")
         

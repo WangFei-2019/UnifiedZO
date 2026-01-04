@@ -14,8 +14,8 @@ class MeZOSVRGTrainer(MeZOTrainer):
         super().__init__(model, args, **kwargs)
         
         # SVRG Hyperparameters
-        self.svrg_q = getattr(args, "svrg_q", 100)  # Update frequency for anchor (inner loop length)
-        self.svrg_k = getattr(args, "svrg_k", 1)    # Number of ZO samples to estimate full gradient (mu)
+        self.svrg_q = args.svrg_q    # Update frequency for anchor (inner loop length)
+        self.svrg_k = args.svrg_k    # Number of ZO samples to estimate full gradient (mu)
         
         # Storage for Anchor State
         # We use a dictionary to store CPU tensors to save GPU memory

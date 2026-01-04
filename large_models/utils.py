@@ -246,8 +246,8 @@ def process_dataset(
     data = []
     
     # Check if we should perform SFC (Surface Form Competition) calibration
-    sfc = getattr(args, 'sfc', False)
-    icl_sfc = getattr(args, 'icl_sfc', False)
+    sfc = args.sfc
+    icl_sfc = args.icl_sfc
 
     for sample in samples:
         # Encode the prompt using the task's template

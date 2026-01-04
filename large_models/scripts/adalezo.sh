@@ -17,7 +17,7 @@ ADA_TAU=${ADA_TAU:-0.6}         # Temperature for Softmax/Gumbel  0.5-0.7
 ADA_CLIP=${ADA_CLIP:-4}        # IPW clipping threshold: 16 for easy tasks, 4 for hard tasks
 ADA_MOMENTUM=${ADA_MOMENTUM:-False} # Whether to use momentum for layer selection
 ADA_GAMMA=${ADA_GAMMA:-0.1}
-ADA_ALPHA=${ADA_ALPHA:-0.1}       # EMA smoothing factor 
+ADA_ALPHA=${ADA_ALPHA:-0.1}       # EMA smoothing factor
 
 if [ "$MODE" == "lora" ]; then
     LR=${LR:-5e-5}
