@@ -11,7 +11,7 @@ logger.setLevel(logging.INFO)
 
 class PrefixCache:
     """
-    [CRITICAL FIX] A compatibility wrapper that mimics transformers.Cache for Prefix Tuning.
+    A compatibility wrapper that mimics transformers.Cache for Prefix Tuning.
     It holds the prefix keys/values and implements the .update() method 
     required by newer transformers versions (v4.36+).
     """

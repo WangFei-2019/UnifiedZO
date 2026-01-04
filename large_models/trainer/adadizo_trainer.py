@@ -11,7 +11,6 @@ logger = logging.get_logger(__name__)
 class DiZOConstraint(nn.Module):
     """
     Helper class for DiZO to manage constraints and projections.
-    Fixed for memory efficiency (CPU offloading) and correct tensor device management.
     """
     def __init__(self, model, exclude_list=[], norm_mode='l2'):
         super().__init__()
@@ -65,7 +64,7 @@ class DiZOConstraint(nn.Module):
             if name in self.constraints_name:
                 constraint = next(constraint_iterator)
                 
-                # [Memory Fix] Move anchor parameter to GPU temporarily for calculation
+                # Move anchor parameter to GPU temporarily for calculation
                 anchor_gpu = anchor_para.to(new_para.device)
 
                 # Calculate projection ratio
@@ -93,7 +92,7 @@ class DiZOConstraint(nn.Module):
             if name in self.constraints_name:
                 alpha = self.alpha.get(name, 1.0)
                 
-                # [Memory Fix] Move anchor parameter to GPU temporarily
+                # Move anchor parameter to GPU temporarily
                 anchor_gpu = anchor_para.to(new_para.device)
 
                 # v = (current - anchor) / alpha -> restores original direction magnitude
@@ -144,7 +143,7 @@ class AdaDiZOTrainer(AdaLeZOTrainer):
         logger.info("Initializing AdaDiZO: Creating anchor model...")
         self.anchor_model = copy.deepcopy(model)
         
-        # [Memory Fix] Ensure anchor model stays on CPU to save GPU memory
+        # Ensure anchor model stays on CPU to save GPU memory
         # This is critical for avoiding OOM on large models
         for param in self.anchor_model.parameters():
             param.requires_grad = False
@@ -204,7 +203,7 @@ class AdaDiZOTrainer(AdaLeZOTrainer):
         with torch.no_grad():
             for (name, para), anchor in zip(model.named_parameters(), self.anchor_model.parameters()):
                 if name in self.dizo_constraint.constraints_name:
-                    # [Memory Fix] Move anchor param to GPU specifically for this calculation
+                    # Move anchor param to GPU specifically for this calculation
                     anchor_gpu = anchor.data.to(para.device)
                     diff = para.data - anchor_gpu
                     

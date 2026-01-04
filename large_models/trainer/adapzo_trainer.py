@@ -257,7 +257,7 @@ class AdaPZOTrainer(AdaLeZOTrainer):
         """
         epoch = int(self.state.epoch) if self.state.epoch is not None else 0
         
-        # CRITICAL FIX: Only update if the epoch has changed.
+        # Only update if the epoch has changed.
         if epoch == self.last_epoch_update:
             return
         self.last_epoch_update = epoch
@@ -282,7 +282,7 @@ class AdaPZOTrainer(AdaLeZOTrainer):
         """
         self.momentum_fb = momentum_fb
         
-        # CRITICAL FIX: Reset window only on restart (momentum back to max)
+        # Reset window only on restart (momentum back to max)
         if self.momentum_fb == self.momentum_fb_max:
              self.sliding_window = deque(maxlen=self.args.sliding_window_length)
              # logger.info(f"AdaPZO: Momentum reset to max ({self.momentum_fb}), sliding window cleared.")

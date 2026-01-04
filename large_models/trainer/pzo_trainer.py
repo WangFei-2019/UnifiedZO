@@ -199,7 +199,7 @@ class PZOTrainer(BaseZOTrainer):
     # --- Momentum Scheduling Logic (FIXED) ---
 
     def _update_momentum_coefficient(self):
-        # FIX: Use integer epoch to match original behavior (step-wise schedule per epoch)
+        # Use integer epoch to match original behavior (step-wise schedule per epoch)
         # self.state.epoch is float (e.g., 0.1, 0.2). Cast to int.
         epoch = int(self.state.epoch) if self.state.epoch is not None else 0
     
@@ -234,7 +234,7 @@ class PZOTrainer(BaseZOTrainer):
         old_momentum = getattr(self, 'momentum_fb', None)
         self.momentum_fb = momentum_fb
         
-        # CRITICAL FIX: Clear sliding window if momentum resets to max (Cycle Restart)
+        # Clear sliding window if momentum resets to max (Cycle Restart)
         # Original code: if self.momentum_fb == self.momentum_fb_max: ... deque(maxlen=...)
         # Because we now only call this once per epoch, this correctly clears 
         # the window only at the start of a new cycle (when momentum jumps back to max).
