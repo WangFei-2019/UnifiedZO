@@ -24,7 +24,6 @@ class DiZOConstraint(nn.Module):
         
         # Initialize constraints (gamma) for trainable parameters
         self._create_constraints(model)
-        # self.init flag is removed as we handle re-initialization explicitly in the trainer
 
     def _create_constraints(self, model):
         """Creates learnable constraint parameters (gamma) for each model parameter."""
@@ -38,6 +37,7 @@ class DiZOConstraint(nn.Module):
 
     def _project_ratio(self, new_param, anchor_param, constraint_val):
         """Calculates the projection ratio alpha."""
+        # Note: input params must be on the same device before calling this
         diff = new_param.detach() - anchor_param.detach()
 
         if "l2" in self.norm_mode:
@@ -45,8 +45,6 @@ class DiZOConstraint(nn.Module):
             norm = torch.norm(diff)
         else:
             # MARS-like norm or L1: Sum of abs dimensions excluding the first.
-            # This handles row-wise projection for matrices (dim 0 = out_features, dim 1... = in_features)
-            # If it is a 1D tensor (e.g. bias), dim 1 doesn't exist, so we sum everything.
             dims = tuple(range(1, diff.dim()))
             if len(dims) == 0:
                 norm = torch.sum(torch.abs(diff))
@@ -55,7 +53,6 @@ class DiZOConstraint(nn.Module):
                 norm = torch.sum(torch.abs(diff), dim=dims, keepdim=True)
 
         # Avoid division by zero
-        # constraint_val is scalar, norm might be vector (in MARS mode) or scalar (in L2 mode)
         ratio = constraint_val / (norm + 1e-8)
         return ratio
 
@@ -68,33 +65,44 @@ class DiZOConstraint(nn.Module):
             if name in self.constraints_name:
                 constraint = next(constraint_iterator)
                 
+                # Move anchor parameter to GPU temporarily for calculation
+                # This prevents OOM by keeping the full anchor model on CPU
+                anchor_gpu = anchor_para.to(new_para.device)
+
                 # Calculate projection ratio
-                alpha = self._project_ratio(new_para, anchor_para, constraint)
+                alpha = self._project_ratio(new_para, anchor_gpu, constraint)
                 
                 if save_alpha:
                     self.alpha[name] = alpha
                 
                 # Apply projection
                 # v = direction * alpha
-                # alpha broadcasts: scalar for L2, vector [Out, 1] for MARS
-                v = (new_para.detach() - anchor_para.detach()) * alpha
-                temp = v + anchor_para.detach()
+                v = (new_para.detach() - anchor_gpu.detach()) * alpha
+                temp = v + anchor_gpu.detach()
                 
                 # Update model parameter in-place
                 new_para.data.copy_(temp)
 
+                # Explicitly delete temporary tensor to free GPU memory immediately
+                del anchor_gpu
+
     def reverse_constraints(self, model, anchor_model):
         """
         Reverses the projection to restore the model state before calculating the gradient for gamma.
-        This allows estimating gradients w.r.t gamma without permanently modifying theta during the estimation step.
         """
         for (name, new_para), anchor_para in zip(model.named_parameters(), anchor_model.parameters()):
             if name in self.constraints_name:
                 alpha = self.alpha.get(name, 1.0)
+                
+                # Move anchor parameter to GPU temporarily
+                anchor_gpu = anchor_para.to(new_para.device)
+
                 # v = (current - anchor) / alpha -> restores original direction magnitude
-                v = (new_para.detach() - anchor_para.detach()) / alpha
-                temp = v + anchor_para.detach()
+                v = (new_para.detach() - anchor_gpu.detach()) / alpha
+                temp = v + anchor_gpu.detach()
                 new_para.data.copy_(temp)
+                
+                del anchor_gpu
 
     def perturb_gamma(self, scaling_factor, ts, zs, tau, zo_eps):
         """
@@ -106,7 +114,6 @@ class DiZOConstraint(nn.Module):
             if name not in zs:
                 z = torch.normal(0, 1, size=(1,), device=gamma.device, dtype=gamma.dtype)
                 # Clip noise based on tau and ts (current parameter distance)
-                # ts[i] is the scalar distance of this parameter block
                 limit = ((tau / zo_eps) * ts[i]).item()
                 z = torch.clamp(z, -limit, limit)
                 zs[name] = z
@@ -137,8 +144,11 @@ class DiZOTrainer(MeZOTrainer):
         # Create Anchor Model (Pre-trained / Initial state)
         logger.info("Initializing DiZO: Creating anchor model...")
         self.anchor_model = copy.deepcopy(model)
+        
+        # Ensure anchor model stays on CPU to save GPU memory
         for param in self.anchor_model.parameters():
             param.requires_grad = False
+            param.data = param.data.cpu()
         
         # Initialize DiZO Constraint Manager
         self.exclude_list = [n for n, p in model.named_parameters() if not p.requires_grad]
@@ -157,7 +167,7 @@ class DiZOTrainer(MeZOTrainer):
 
         # 2. DiZO Projection Step (Periodically)
         if self.state.global_step > 0 and self.state.global_step % self.dizo_interval == 0:
-            self.dizo_step(model) # Changed: Don't pass inputs, fetch new ones
+            self.dizo_step(model) 
 
         return loss
 
@@ -183,24 +193,26 @@ class DiZOTrainer(MeZOTrainer):
         """
         logger.info(f"Running DiZO projection at step {self.state.global_step}...")
         
-        # Ensure modules are on the correct device
+        # Ensure constraint module is on the correct device
         self.dizo_constraint.to(model.device)
-        if next(self.anchor_model.parameters()).device != model.device:
-            self.anchor_model.to(model.device)
+        
+        # Removed self.anchor_model.to(model.device) to prevent OOM
 
         # 1. Initialization: Reset Gamma to current parameter distances (ts)
-        # We MUST re-initialize gamma at the start of every DiZO interval.
         ts = []
         with torch.no_grad():
             for (name, para), anchor in zip(model.named_parameters(), self.anchor_model.parameters()):
                 if name in self.dizo_constraint.constraints_name:
-                    diff = para.data - anchor.data
+                    # Move anchor param to GPU specifically for this calculation
+                    anchor_gpu = anchor.data.to(para.device)
+                    diff = para.data - anchor_gpu
+                    
                     if "l2" in self.norm_mode:
                         norm = torch.norm(diff)
                     else:
-                        # Use scalar sum of abs for 'ts' (distance metric for gamma scaling)
                         norm = torch.sum(torch.abs(diff))
                     ts.append(norm)
+                    del anchor_gpu # Free memory
             
             # Reset gamma values
             for i, param in enumerate(self.dizo_constraint.constraints):
@@ -215,6 +227,7 @@ class DiZOTrainer(MeZOTrainer):
         # 3. Final Apply: Project model parameters permanently
         with torch.no_grad():
             constraint_iterator = iter(self.dizo_constraint.constraints)
+            # Anchor model handling is done inside apply_constraints now
             self.dizo_constraint.apply_constraints(model, self.anchor_model, constraint_iterator, save_alpha=False)
         
         logger.info("DiZO projection applied.")
