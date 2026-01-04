@@ -15,13 +15,9 @@ class AdaPZOTrainer(AdaLeZOTrainer):
     Implementation of AdaPZO (AdaLeZO + PseuZO).
     Combines Adaptive Layer-wise selection with Momentum/Sliding Window Zeroth-Order Optimization.
     
-    Logic:
-    1. AdaLeZO: Selects a subset of active layers using Multi-Armed Bandit.
-    2. PseuZO: Maintains a sliding window of output differences (o_diff) and computes gradients w.r.t hidden states.
-    3. Hybrid Update: 
-       - Projects the "true" hidden-state gradient onto the history of output differences.
-       - Reconstructs the parameter update only for the layers that were active in the corresponding history steps.
-       - Scales updates using Inverse Probability Weighting (IPW) to correct for sparse selection bias.
+    Fixed Version:
+    1. Correctly resets sliding window on momentum restart.
+    2. Uses epoch-wise integer scheduling for momentum.
     """
 
     def __init__(self, model, args, **kwargs):
@@ -43,20 +39,16 @@ class AdaPZOTrainer(AdaLeZOTrainer):
         """
         model.eval()
         
-        # 1. Dynamic Momentum Scheduling (from PseuZO)
+        # 1. Dynamic Momentum Scheduling (Fixed logic)
         self._update_momentum_coefficient()
 
         # 2. Get Gradient on Unperturbed model (loss0, o0, grad_last)
-        # Using PZO custom forward to get gradient w.r.t hidden states/logits
         loss0, o0, grad_last = self.pzo_forward(model, inputs, need_grad=True)
         # Store gradient for the update phase
         self.grad_last = grad_last[0] if isinstance(grad_last, tuple) else grad_last
 
         # 3. Perturb Active Layers (+) (from AdaLeZO)
-        # Generate a fresh seed for this step
         self.zo_random_seed = np.random.randint(1000000000)
-        
-        # Apply perturbation only to active layers
         self._perturb_active_layers(scaling_factor=1)
         
         # 4. Forward on perturbed model (loss1, o1)
@@ -66,19 +58,24 @@ class AdaPZOTrainer(AdaLeZOTrainer):
         self._perturb_active_layers(scaling_factor=-1)
         
         # 5. Calculate Output Difference
+        # Safety check for None states
+        if o0 is None or o1 is None:
+             logger.warning("AdaPZO: Hidden states missing. Skipping window update.")
+             # Fallback: Just update bandit with 0 reward or skip update
+             return loss1
+             
         o_diff = o1 - o0
         
         # Store context in sliding window: 
-        # Must store counts and K (num_active_draws) for correct IPW reconstruction later.
+        # Stores context specific to THIS step for correct IPW reconstruction
         current_active = list(self.current_active_layers)
         current_probs = self.current_layer_probs_map.copy()
-        current_counts = self.current_layer_counts_map.copy() # Store counts
-        k_draws = self.num_active_draws # Store K
+        current_counts = self.current_layer_counts_map.copy()
+        k_draws = self.num_active_draws
         
         self.sliding_window.append((self.zo_random_seed, o_diff, current_active, current_probs, current_counts, k_draws))
         
         # 6. Calculate Reward for Bandit (Proxy: abs(loss1 - loss0))
-        # This measures the sensitivity of the selected layers for the bandit algorithm.
         step_reward = abs((loss1 - loss0).item())
 
         # 7. Update Parameters (Hybrid Update)
@@ -101,10 +98,13 @@ class AdaPZOTrainer(AdaLeZOTrainer):
         dot_products = []
         history_items = [] 
         
+        if self.grad_last is None:
+            return
+
         for item in self.sliding_window:
             seed, o_diff, active, probs, counts, k_draws = item
             
-            # Align sequence lengths if necessary (truncation logic from PZO)
+            # Align sequence lengths (PseuZO logic)
             if o_diff.shape[0] != self.grad_last.shape[0]: continue
 
             seq_o = o_diff.shape[1]
@@ -125,113 +125,128 @@ class AdaPZOTrainer(AdaLeZOTrainer):
         if not dot_products:
             return
 
-        # Get relevant momentum coefficients
+        # Get relevant momentum coefficients (tail of the list)
         current_coeffs = self.coefficients[-len(dot_products):]
         
         # --- 2. Apply Updates ---
         # We iterate through history to apply momentum-aggregated updates.
-        # Each history item represents a direction 'z' (sparse) that was taken in the past.
         
-        for (coeff, dot, (seed, active_layers, probs_map, counts_map, k_draws)) in zip(current_coeffs, dot_products, history_items):
-            # Calculate scalar projection value
-            project_value = coeff * dot.item() / args.zo_eps
-            
-            # Reconstruct Sparse Update for this history item
-            for layer_key in active_layers:
-                prob = probs_map[layer_key]
+        with torch.no_grad():
+            for (coeff, dot, (seed, active_layers, probs_map, counts_map, k_draws)) in zip(current_coeffs, dot_products, history_items):
                 
-                # Retrieve count for this specific history step
-                count = counts_map[layer_key]
+                # Calculate scalar projection value
+                project_value = coeff * dot.item() / args.zo_eps
+                
+                # Skip tiny updates
+                if abs(project_value) < 1e-9: continue
 
-                # IPW Calculation
-                raw_ipw = 1.0 / (prob * k_draws + 1e-8)
-                ipw_weight = min(raw_ipw, args.adalezo_ipw_clip)
-                
-                # Apply Count Scaling
-                scale_factor = ipw_weight * count
-                
-                # Regenerate noise 'z' using the stored seed + layer_key
-                torch.manual_seed(seed + layer_key)
-                
-                for name, param in self.params_by_layer[layer_key]:
-                    z = self.generate_random_noise(param.data.size(), param.data.device, param.data.dtype, args.perturb_type)
-                    
-                    # Update Term: projection * z * IPW * Count
-                    update = project_value * z * scale_factor
-                    
-                    # Apply update (with optional weight decay)
-                    if args.weight_decay > 0 and "bias" not in name and "norm" not in name:
-                         param.data -= lr * (update + args.weight_decay * param.data)
-                    else:
-                         param.data -= lr * update
+                # Reconstruct Sparse Update for this history item
+                for layer_key in active_layers:
+                    prob = probs_map[layer_key]
+                    count = counts_map[layer_key]
 
-        # --- 3. Update Bandit Statistics (for CURRENT active layers) ---
-        # We update the bandit stats based on the *current* step's sensitivity (step_reward).
+                    # IPW Calculation
+                    raw_ipw = 1.0 / (prob * k_draws + 1e-8)
+                    ipw_weight = min(raw_ipw, args.adalezo_ipw_clip)
+                    
+                    # Apply Count Scaling
+                    scale_factor = ipw_weight * count
+                    
+                    # Regenerate noise 'z'
+                    torch.manual_seed(seed + layer_key)
+                    
+                    for name, param in self.params_by_layer[layer_key]:
+                        z = self.generate_random_noise(param.data.size(), param.data.device, param.data.dtype, args.perturb_type)
+                        
+                        # Update Term
+                        update = project_value * z * scale_factor
+                        
+                        # Apply update (w/ Weight Decay logic)
+                        if args.weight_decay > 0 and ("bias" not in name and "norm" not in name):
+                             param.data -= lr * (update + args.weight_decay * param.data)
+                        else:
+                             param.data -= lr * update
+
+        # Step LR Scheduler
+        if self.lr_scheduler:
+            self.lr_scheduler.step()
+
+        # --- 3. Update Bandit Statistics (Current Step) ---
         for layer_key in self.current_active_layers:
             idx = self.sorted_layer_keys.index(layer_key)
-            # Increment by current count
             count = self.current_layer_counts_map[layer_key]
             self.layer_counts[idx] += count
             self.layer_avg_rewards[idx] += (step_reward - self.layer_avg_rewards[idx]) / self.layer_counts[idx]
 
     # --------------------------------------------------------------------------
-    # Utilities ported from PZOTrainer
+    # Utilities
     # --------------------------------------------------------------------------
     def pzo_forward(self, model, inputs, need_grad=False):
         """
         Executes the PZO-specific forward pass.
-        Passes 'is_pzo_step=True' to ensure wrappers return the necessary states/logits.
         """
         model.eval()
-        inputs = self._prepare_inputs(inputs)
-        
-        # [Correction]: Pass is_pzo_step=True to tell wrapper we are training, not evaluating.
-        # This ensures we get the state back even if need_grad=False.
-        outputs = model(need_grad=need_grad, is_pzo_step=True, **inputs)
-        
-        # Unpack based on return type
-        if isinstance(outputs.loss, tuple):
-            # [Step 1]: Wrapper returned (loss, state, grad)
-            loss_val, state, grad_last = outputs.loss
-        else:
-            # [Step 2]: Wrapper returned Object
-            loss_val = outputs.loss
-            grad_last = None
-            
-            # Extract state
-            if hasattr(outputs, 'hidden_states') and outputs.hidden_states is not None:
-                # PZO (hidden version): state is in hidden_states[-1]
-                state = outputs.hidden_states[-1] if isinstance(outputs.hidden_states, tuple) else outputs.hidden_states
-            elif hasattr(outputs, 'logits') and outputs.logits is not None:
-                 # PZO (logits version): state is logits
-                state = outputs.logits
+        with torch.no_grad():
+            inputs = self._prepare_inputs(inputs)
+            # Pass is_pzo_step=True to compatible wrappers
+            if need_grad:
+                 outputs = model(need_grad=True, is_pzo_step=True, **inputs)
+                 if isinstance(outputs.loss, tuple):
+                     loss_val, state, grad_last = outputs.loss
+                 else:
+                     # Fallback
+                     loss_val = outputs.loss
+                     state, grad_last = None, None
             else:
-                state = None 
+                 outputs = model(need_grad=False, is_pzo_step=True, **inputs)
+                 loss_val = outputs.loss if not isinstance(outputs.loss, tuple) else outputs.loss[0]
+                 grad_last = None
+                 
+                 # Retrieve state
+                 if hasattr(outputs, 'hidden_states') and outputs.hidden_states is not None:
+                     state = outputs.hidden_states[-1] if isinstance(outputs.hidden_states, tuple) else outputs.hidden_states
+                 elif hasattr(outputs, 'logits') and outputs.logits is not None:
+                     state = outputs.logits
+                 else:
+                     state = None
+
+            if self.args.n_gpu > 1 and loss_val.ndim > 0:
+                loss_val = loss_val.mean()
 
         return loss_val, state, grad_last
     
 
     def _update_momentum_coefficient(self):
         """
-        Updates the momentum decay factor based on a cyclic schedule.
+        Fixed: Uses integer epoch for scheduling to match PseuZO paper logic.
         """
-        epoch = self.state.epoch if self.state.epoch is not None else 0
+        epoch = int(self.state.epoch) if self.state.epoch is not None else 0
         num_train_epochs = self.state.num_train_epochs if self.state.num_train_epochs is not None else 1
         
         def cyclic_hyperbola(t, T, k):
+            if k == 0: return self.momentum_fb_max
             cyc = T // k
+            if cyc == 0: cyc = 1
             if t >= cyc * k: return self.momentum_fb_min
             t = t % cyc
             return (self.momentum_fb_max / (1 + 10 * t) if t <= 10 else self.momentum_fb_min)
         
         new_momentum = cyclic_hyperbola(epoch, num_train_epochs, 2)
+        
+        # Only reset if changed or logic dictates (here we call it to ensure window management)
+        # Ideally, we check if new_momentum != self.momentum_fb OR if it's a restart condition
         self.reset_momentum_fb(new_momentum)
 
     def reset_momentum_fb(self, momentum_fb):
         """
-        Resets and pre-calculates momentum coefficients.
+        Fixed: Clears sliding window when momentum resets to max (Restart).
         """
         self.momentum_fb = momentum_fb
+        
+        # CRITICAL FIX: Reset window on restart
+        if self.momentum_fb == self.momentum_fb_max:
+             self.sliding_window = deque(maxlen=self.args.sliding_window_length)
+        
         self.coefficients = []
         for i in range(self.args.sliding_window_length):
             if i == 0: 
