@@ -961,4 +961,4 @@ def main_test(
 
 if __name__ == "__main__":
     Fire(main_test)
-    # CUDA_VISIBLE_DEVICES=0 python test_zo_bench.py 16 256 mezo none 20 True /workspace/wangfei154/models/facebook/opt-13b
+    # CUDA_VISIBLE_DEVICES=0 python test_fake_time_memory.py 16 256 mezo none 20 True /workspace/wangfei154/models/facebook/opt-13b
