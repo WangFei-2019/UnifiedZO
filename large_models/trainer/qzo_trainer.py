@@ -6,10 +6,10 @@ from transformers.utils import logging
 logger = logging.get_logger(__name__)
 
 class QZOTrainer(BaseZOTrainer):
-    \"\"\"
+    """
     Implementation of QZO (Quantized Zeroth-Order Optimization).
     Supports GPTQ and AQLM quantized models.
-    \"\"\"
+    """
 
     def __init__(self, model, args, **kwargs):
         super().__init__(model, args, **kwargs)
@@ -36,10 +36,10 @@ class QZOTrainer(BaseZOTrainer):
             self._init_momentum_buffers()
 
     def _identify_quantized_params(self):
-        \"\"\"
+        """
         Identify which parameters are quantization scales and which are regular float16 params.
         Supports GPTQ and AQLM.
-        \"\"\"
+        """
         if self.args.quant_method == 'gptq':
             try:
                 from gptqmodel.nn_modules.qlinear.tritonv2 import TritonV2QuantLinear
@@ -78,7 +78,7 @@ class QZOTrainer(BaseZOTrainer):
             self.fp16_to_optimize_momentum['regular'][name] = 0
 
     def training_step(self, model, inputs, num_items_in_batch=None):
-        \"\"\"
+        """
         QZO Step:
         1. Sample seed
         2. Perturb (+)
@@ -87,7 +87,7 @@ class QZOTrainer(BaseZOTrainer):
         5. Loss 2
         6. Restore (+)
         7. Update
-        \"\"\"
+        """
         model.eval()
 
         self.zo_random_seed = np.random.randint(1000000000)

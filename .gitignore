@@ -7,3 +7,5 @@ code_to_txt.py
 trash
 large_models/trainer/adalezo_trainer_ema.py
 large_models/trainer/adalezo_trainer_ucb_noreplace.py
+**quantized_models/
+**gptqmodel_offload/

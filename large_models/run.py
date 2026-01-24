@@ -127,25 +127,14 @@ def main():
 
         # Initialize Model
         # device_map='auto' handles model placement (CPU/GPU)
-        
-        if args.quant_method == 'gptq':
-            logger.info("Loading model with GPTQModel...")
-            from gptqmodel import GPTQModel, QuantizeConfig
-            # Note: GPTQModel usually handles its own device mapping
-            model = GPTQModel.from_pretrained(
-                args.model_name, 
-                trust_remote_code=True, 
-                device_map='auto'
-            )
-        else:
-            model = AutoModelForCausalLM.from_pretrained(
-                args.model_name,
-                config=config,
-                device_map='auto' if not args.no_auto_device else None,
-                torch_dtype=torch_dtype, 
-                load_in_8bit=args.load_int8,
-                trust_remote_code=True
-            )
+        model = AutoModelForCausalLM.from_pretrained(
+            args.model_name,
+            config=config,
+            device_map='auto' if not args.no_auto_device else None,
+            torch_dtype=torch_dtype, 
+            load_in_8bit=args.load_int8,
+            trust_remote_code=True
+        )
         model.eval()
 
     # 4. Inject Parameter Efficient Fine-Tuning (PEFT)

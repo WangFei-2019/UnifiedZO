@@ -18,7 +18,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Define dataset directory if needed, otherwise rely on HF cache
-DATASET_DIR = os.getenv("DATASET_DIR", None)
+DATASET_DIR = os.getenv("DATASET_DIR", "/workspace/wangfei154/datasets")
 
 def get_calib_dataset(
     data: Union[str, List[str], List[List[int]]] = "pileval",
@@ -28,10 +28,10 @@ def get_calib_dataset(
     split="train",
     text_column="text",
 ):
-    \"\"\"
+    """
     Prepare calibration dataset for quantization.
     Adapted from AWQ repository and LQZO implementation.
-    \"\"\"
+    """
     if isinstance(data, str):
         if data == "pileval":
             # Use local path if DATASET_DIR is set, else download from HF Hub
@@ -101,9 +101,9 @@ def get_calib_dataset(
 
 
 def run_gptq(args):
-    \"\"\"
+    """
     Execute GPTQ quantization process.
-    \"\"\"
+    """
     model_path = args.model_path
     quant_path = args.quant_path
     bits = args.bits
@@ -131,12 +131,25 @@ def run_gptq(args):
     )
 
     logger.info("Starting quantization...")
-    model.quantize(
-        processed_calibration_dataset, 
-        tokenizer=tokenizer, 
-        batch_size=2, 
-        calibration_enable_gpu_cache=True
-    )
+    
+    # Try quantize with different argument sets to handle version differences
+    try:
+        # removed calibration_enable_gpu_cache=True as it is not supported in newer versions
+        model.quantize(
+            processed_calibration_dataset, 
+            tokenizer=tokenizer, 
+            batch_size=2
+        )
+    except TypeError as e:
+        # Fallback: some versions might not accept 'tokenizer' as argument if dataset is pre-processed
+        if "tokenizer" in str(e):
+            logger.warning(f"Quantization with tokenizer arg failed: {e}. Retrying without tokenizer...")
+            model.quantize(
+                processed_calibration_dataset, 
+                batch_size=2
+            )
+        else:
+            raise e
     
     # Construct save path
     model_name = model_path.rstrip('/').split('/')[-1]

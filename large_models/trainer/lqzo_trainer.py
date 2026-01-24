@@ -3,10 +3,10 @@ import numpy as np
 from .qzo_trainer import QZOTrainer
 
 class LQZOTrainer(QZOTrainer):
-    \"\"\"
+    """
     Implementation of LQZO (Low-Rank Quantized Zeroth-Order Optimization).
     Inherits from QZOTrainer to reuse param identification logic.
-    \"\"\"
+    """
 
     def __init__(self, model, args, **kwargs):
         super().__init__(model, args, **kwargs)
