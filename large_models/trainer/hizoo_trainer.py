@@ -2,6 +2,9 @@ import torch
 import numpy as np
 from .base_zo_trainer import BaseZOTrainer
 from .schedulers import hessian_smooth_scheduler
+from transformers.utils import logging
+
+logger = logging.get_logger(__name__)
 
 class HiZOOTrainer(BaseZOTrainer):
     """

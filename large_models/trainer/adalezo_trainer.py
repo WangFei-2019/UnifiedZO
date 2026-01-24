@@ -157,6 +157,12 @@ class AdaLeZOTrainer(BaseZOTrainer):
         # Restore Active Layers to original state (add 1)
         self._perturb_active_layers(scaling_factor=1)
         
+        # --- [新增] 实验一代码插入点：Oracle 梯度相关性分析 ---
+        # 建议每隔 N 步 (如 100 步) 运行一次，因为反向传播非常耗时
+        if self.state.global_step % 100 == 0:
+            self._analyze_gradient_correlation(model, inputs)
+        # -----------------------------------------------------
+
         # 5. Update Parameters & Bandit Stats
         self._update_adalezo()
         
@@ -212,16 +218,15 @@ class AdaLeZOTrainer(BaseZOTrainer):
             # --- Optional: Layer-wise Momentum (Adaptive Scaling) ---
             if args.adalezo_layer_momentum:
                 idx = self.sorted_layer_keys.index(layer_key)
-                
+
                 # Estimate variance. 
-                # Note: We update momentum stats based on "one observation" of the gradient
-                layer_grad_est = self.projected_grad * ipw_weight
-                current_energy = layer_grad_est ** 2
+                # Note: We update momentum stats based on "one observation" of the gradient energy.
+                current_energy = self.projected_grad ** 2 
                 
                 self.layer_sq_grads[idx] = args.adalezo_beta * self.layer_sq_grads[idx] + (1 - args.adalezo_beta) * current_energy
                 denom = torch.sqrt(self.layer_sq_grads[idx]) + 1e-8
                 
-                scale_factor = scale_factor / denom
+                scale_factor = (scale_factor / denom).item()
 
             # --- Parameter Update ---
             torch.manual_seed(self.zo_random_seed + layer_key)
@@ -266,3 +271,136 @@ class AdaLeZOTrainer(BaseZOTrainer):
         save_path = os.path.join(self.args.output_dir, "adalezo_probs.jsonl")
         with open(save_path, "a") as f:
             f.write(json.dumps(data) + "\n")
+
+    def _analyze_gradient_correlation(self, model, inputs):
+        """
+        实验一辅助函数：计算 ZO 估计梯度与真实梯度（Oracle）的余弦相似度并保存。
+        修正版：增加对 tuple 输出的处理。
+        """
+        import torch.nn.functional as F
+        import os
+        import json
+
+        # 1. 计算真实梯度 (True Gradient)
+        model.zero_grad()
+        
+        # 确保 inputs 在正确的设备上 (如果之前未处理)
+        # inputs = self._prepare_inputs(inputs) # 视情况取消注释，通常 training_step 里的 inputs 已经处理好了
+        
+        with torch.enable_grad():
+            outputs = model(**inputs)
+            
+            # --- [修复] 兼容 Tuple 和 ModelOutput ---
+            if hasattr(outputs, "loss"):
+                loss_true = outputs.loss
+            elif isinstance(outputs, dict) and "loss" in outputs:
+                loss_true = outputs["loss"]
+            else:
+                # 如果是 tuple，通常第一个元素是 loss
+                loss_true = outputs[0]
+            # -------------------------------------
+
+            # 检查 loss 是否为 None (有时 inference 模式下某些模型不返回 loss)
+            if loss_true is None:
+                # 如果 inputs 里没有 labels，模型可能不计算 loss。确保 inputs 包含 labels。
+                logger.warning("[Analysis] True gradient calculation skipped: Model did not return a loss.")
+                model.zero_grad()
+                return
+
+            loss_true.backward()
+        
+        # 2. 准备向量容器
+        zo_vec_list = []
+        true_grad_vec_list = []
+        
+        # 3. 遍历当前活跃层，构建 ZO 更新向量和真实梯度向量
+        args = self.args
+        
+        # 预计算一些不需要梯度的参数以复现 _update_adalezo 的逻辑
+        # 注意：这里需要重新获取当前的 ipw 和 counts，因为它们在 _resample_layers 后是固定的
+        
+        for layer_key in self.current_active_layers:
+            # 获取该层参数
+            layer_params = self.params_by_layer[layer_key]
+            
+            # 3.1 恢复该层的 ZO 配置
+            prob = self.current_layer_probs_map[layer_key]
+            count = self.current_layer_counts_map[layer_key]
+            
+            # 复现 IPW 和 Scale Factor 逻辑 (必须与 _update_adalezo 严格一致)
+            current_raw_ipw = 1.0 / (prob * self.num_active_draws + 1e-8)
+            ipw_weight = min(current_raw_ipw, args.adalezo_ipw_clip)
+            base_scale = ipw_weight * count
+            
+            # 复现 RMS (Adaptive Scaling) 逻辑
+            idx = self.sorted_layer_keys.index(layer_key)
+            if args.adalezo_layer_momentum:
+                layer_grad_est = self.projected_grad * ipw_weight
+                current_energy = layer_grad_est ** 2
+                # 模拟更新后的二阶矩 (窥视未来一步的 denom)
+                simulated_sq_grad = args.adalezo_beta * self.layer_sq_grads[idx] + (1 - args.adalezo_beta) * current_energy
+                # 使用您代码中实际的 epsilon
+                denom = torch.sqrt(simulated_sq_grad) + 1e-8
+                base_scale = base_scale / denom.item()
+            
+            # 3.2 重建该层的 ZO 方向向量 (z)
+            # 关键：必须使用与 perturb 和 update 相同的 Seed
+            torch.manual_seed(self.zo_random_seed + layer_key)
+            
+            for name, param in layer_params:
+                # 如果真实梯度不存在 (例如凍結参数)，跳过
+                if param.grad is None: 
+                    # 消耗随机数以保持 RNG 同步
+                    self.generate_random_noise(param.data.size(), param.data.device, param.data.dtype, 'Gaussian')
+                    continue
+                
+                # 生成噪声 z
+                z = self.generate_random_noise(param.data.size(), param.data.device, param.data.dtype, 'Gaussian')
+                
+                # ZO 估计的梯度方向 (Effective Update Direction)
+                zo_grad_component = self.projected_grad * z * base_scale
+                
+                # 收集向量 (Flatten)
+                zo_vec_list.append(zo_grad_component.flatten().float().cpu())
+                true_grad_vec_list.append(param.grad.flatten().float().cpu())
+
+        # 4. 如果没有收集到梯度（例如所有层都被冻结），直接返回
+        if not zo_vec_list:
+            model.zero_grad()
+            return
+
+        # 5. 拼接成大向量并计算 Cosine Similarity
+        zo_full_vec = torch.cat(zo_vec_list)
+        true_full_vec = torch.cat(true_grad_vec_list)
+        
+        # 避免除以零
+        if true_full_vec.norm() < 1e-8 or zo_full_vec.norm() < 1e-8:
+             cos_sim = 0.0
+        else:
+             cos_sim = F.cosine_similarity(zo_full_vec.unsqueeze(0), true_full_vec.unsqueeze(0)).item()
+        
+        zo_norm = torch.norm(zo_full_vec).item()
+        true_norm = torch.norm(true_full_vec).item()
+
+        # 6. 清理梯度，防止影响后续 ZO 步骤
+        model.zero_grad()
+
+        # 7. 写入文件
+        log_data = {
+            "step": self.state.global_step,
+            "projected_grad": self.projected_grad,
+            "cosine_similarity": cos_sim,
+            "zo_norm": zo_norm,
+            "true_grad_norm": true_norm,
+            "ratio_zo_true": zo_norm / (true_norm + 1e-8)
+        }
+        
+        # # 确保输出目录存在
+        # if not os.path.exists(self.args.output_dir):
+        #     os.makedirs(self.args.output_dir, exist_ok=True)
+
+        save_path = os.path.join("/workspace/wangfei154/project/UnifiedZO/large_models/result/analysis", "analysis_gradient_correlation.jsonl")
+        with open(save_path, "a") as f:
+            f.write(json.dumps(log_data) + "\n")
+            
+        logger.info(f"[Analysis] Step {self.state.global_step}: CosSim={cos_sim:.6f}, ZO_Norm={zo_norm:.4f}, True_Norm={true_norm:.4f}")

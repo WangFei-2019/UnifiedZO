@@ -37,7 +37,7 @@ class ZOTrainingArguments(TrainingArguments):
     template_ver: int = field(default=0, metadata={"help": "template. For some tasks (SST2, RTE, Copa), we add template ver=1 as the empty template."})
 
     # --- ZO Specific Arguments ---
-    trainer: str = field(default="none", metadata={"help": "The ZO method to use: 'mezo', 'zoadamu', 'lozo', 'hizoo', 'pzo' (pseuZO), 'fzoo', 'dizo', 'mezo_svrg'. The FO method to use: 'regular'. ICL method to use: 'none'"})
+    trainer: str = field(default="none", metadata={"help": "The ZO method to use: 'mezo', 'zoadamu', 'lozo', 'hizoo', 'pzo' (pseuZO), 'fzoo', 'dizo', 'mezo_svrg', 'qzo', 'lqzo'. The FO method to use: 'regular'. ICL method to use: 'none'"})
     zo_eps: float = field(default=1e-3, metadata={"help": "Epsilon value for perturbation scale."})
 
     # --- ZO-AdaMU Specific Arguments ---
@@ -137,3 +137,18 @@ class ZOTrainingArguments(TrainingArguments):
     untie_emb: bool = field(default=False, metadata={"help": "Untie embeddings and LM head."})
 
     report_to: str = field(default="wandb", metadata={"help": "Where to report results (e.g., 'wandb', 'tensorboard', 'none')."})
+
+    # --- Quantized ZO Specific Arguments ---
+    # --- QZO / LQZO Specific Arguments ---
+    quant_method: str = field(default="none", metadata={"help": "Quantization method: 'gptq', 'aqlm', or 'none'."})
+    train_unquantized: bool = field(default=False, metadata={"help": "Whether to train unquantized parameters (e.g. norms, bias) in QZO/LQZO."})
+    zo_scale: float = field(default=1.0, metadata={"help": "Learning rate scaler for quantization scales."}) # Renamed from 'scale' to avoid conflict
+    channel_scale: int = field(default=1, metadata={"help": "Channel scale factor for LQZO reshaping."})
+    clip_zo_grad: bool = field(default=False, metadata={"help": "Whether to clip the projected gradient."})
+    
+    # QZO/LQZO Momentum
+    momentum: bool = field(default=False, metadata={"help": "Enable basic momentum for ZO."})
+    beta: float = field(default=0.9, metadata={"help": "Momentum factor (beta)."})
+    momentum_u: bool = field(default=False, metadata={"help": "Use Momentum U strategy for LQZO."})
+    momentum_lozo: bool = field(default=False, metadata={"help": "Use LoZO Momentum strategy for LQZO."})
+    momentum_lqzo: bool = field(default=False, metadata={"help": "Use LQZO Momentum strategy."})

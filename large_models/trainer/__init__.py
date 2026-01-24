@@ -1,5 +1,3 @@
-# trainer/__init__.py
-
 from .base_zo_trainer import BaseZOTrainer
 from .mezo_trainer import MeZOTrainer
 from .lozo_trainer import LoZOTrainer
@@ -11,6 +9,10 @@ from .dizo_trainer import DiZOTrainer
 from .mezo_svrg_trainer import MeZOSVRGTrainer
 from .adalezo_trainer import AdaLeZOTrainer
 from .schedulers import zo_lr_scheduler, hessian_smooth_scheduler
+
+# Quantized ZO
+from .qzo_trainer import QZOTrainer
+from .lqzo_trainer import LQZOTrainer
 
 # AdaLeZO Plus
 from .adalozo_trainer import AdaLoZOTrainer
@@ -43,6 +45,12 @@ def get_trainer_class(args):
         return MeZOSVRGTrainer
     elif args.trainer == "adalezo":
         return AdaLeZOTrainer
+        
+    # Quantized
+    elif args.trainer == "qzo":
+        return QZOTrainer
+    elif args.trainer == "lqzo":
+        return LQZOTrainer
 
     # AdaLeZO Plus
     elif args.trainer == "adazoadamu":

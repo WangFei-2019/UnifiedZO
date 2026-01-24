@@ -1,6 +1,9 @@
 import torch
 import numpy as np
 from .base_zo_trainer import BaseZOTrainer
+from transformers.utils import logging
+
+logger = logging.get_logger(__name__)
 
 class LoZOTrainer(BaseZOTrainer):
     """
