@@ -64,20 +64,20 @@ fi
 
 echo "Running LQZO | Mode: $MODE | LR: $LR | EPS: $EPS | Model: $MODEL | Task: $TASK | Quant: $QUANT_METHOD | Rank: $LOZO_RANK"
 
-python run.py \\
-    --model_name $MODEL \\
-    --task_name $TASK \\
-    --output_dir result-lqzo/$TASK-${MODEL_NAME}-$TAG --tag $TAG \\
-    --train_set_seed $SEED --logging_steps 10 --max_steps $STEPS \\
-    --num_train $TRAIN --num_dev $DEV --num_eval $EVAL \\
-    --trainer lqzo --load_float16 \\
-    --learning_rate $LR --zo_eps $EPS --per_device_train_batch_size $BS --per_device_eval_batch_size $BS \\
-    --lr_scheduler_type "constant" \\
-    --load_best_model_at_end --eval_strategy steps --save_strategy steps --save_total_limit 1 \\
-    --eval_steps $EVAL_STEPS --save_steps $EVAL_STEPS \\
-    --train_as_classification \\
-    --gradient_accumulation_steps $GRAD_ACCUM_STEPS \\
-    $PEFT_ARGS \\
-    $TASK_ARGS \\
-    $EXTRA_ZO_ARGS \\
+python run.py \
+    --model_name $MODEL \
+    --task_name $TASK \
+    --output_dir result-lqzo/$TASK-${MODEL_NAME}-$TAG --tag $TAG \
+    --train_set_seed $SEED --logging_steps 10 --max_steps $STEPS \
+    --num_train $TRAIN --num_dev $DEV --num_eval $EVAL \
+    --trainer lqzo --load_float16 \
+    --learning_rate $LR --zo_eps $EPS --per_device_train_batch_size $BS --per_device_eval_batch_size $BS \
+    --lr_scheduler_type "constant" \
+    --load_best_model_at_end --eval_strategy steps --save_strategy steps --save_total_limit 1 \
+    --eval_steps $EVAL_STEPS --save_steps $EVAL_STEPS \
+    --train_as_classification \
+    --gradient_accumulation_steps $GRAD_ACCUM_STEPS \
+    $PEFT_ARGS \
+    $TASK_ARGS \
+    $EXTRA_ZO_ARGS \
     "$@"

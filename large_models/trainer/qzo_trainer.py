@@ -12,7 +12,17 @@ class QZOTrainer(BaseZOTrainer):
     """
 
     def __init__(self, model, args, **kwargs):
-        super().__init__(model, args, **kwargs)
+        _old_is_quantized = getattr(model, "is_quantized", False)
+        if _old_is_quantized:
+            model.is_quantized = False
+        
+        try:
+            super().__init__(model, args, **kwargs)
+        finally:
+            # Restore the flag to ensure correct behavior elsewhere (e.g. saving)
+            if _old_is_quantized:
+                model.is_quantized = True
+
         self.fp16_to_optimize = {
             'scales': [], # list of params
             'regular': [] # list of (name, param)

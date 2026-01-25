@@ -58,7 +58,7 @@ class LQZOTrainer(QZOTrainer):
             for name, param in self.fp16_to_optimize['regular']:
                 if param.data.ndim >= 2:
                     # Low-rank perturbation for 2D params
-                    if step % args.lozo_step_interval == 0:
+                    if (name not in self.v_matrices) or (step % args.lozo_step_interval == 0):
                         v = self.random_bernoulli_matrix(m=param.data.size(1), n=args.lozo_rank, device=param.data.device, dtype=param.data.dtype)
                         self.v_matrices[name] = v
                     else:
@@ -76,7 +76,7 @@ class LQZOTrainer(QZOTrainer):
         # 2. Scales
         for name, param in self.fp16_to_optimize['scales']:
             if param.data.ndim >= 2:
-                if step % args.lozo_step_interval == 0:
+                if (name not in self.v_matrices) or (step % args.lozo_step_interval == 0):
                     # Handle LQZO Momentum special case for V initialization
                     if args.momentum_lqzo and name in self.fp16_to_optimize_momentum['scales'] and not isinstance(self.fp16_to_optimize_momentum['scales'][name], int):
                         v = self.random_bernoulli_matrix(m=param.data.size(1) // args.channel_scale, n=args.lozo_rank, device=param.data.device, dtype=param.data.dtype)
@@ -111,7 +111,7 @@ class LQZOTrainer(QZOTrainer):
         if args.train_unquantized:
             for name, param in self.fp16_to_optimize['regular']:
                 if param.data.ndim >= 2:
-                    if self.step_counter % args.lozo_step_interval == 0:
+                    if (name not in self.v_matrices) or (self.step_counter % args.lozo_step_interval == 0):
                         v = self.random_bernoulli_matrix(m=param.data.size(1), n=args.lozo_rank, device=param.data.device, dtype=param.data.dtype)
                     else:
                         v = self.v_matrices[name]
@@ -129,7 +129,7 @@ class LQZOTrainer(QZOTrainer):
         # 2. Scales
         for name, param in self.fp16_to_optimize['scales']:
             if param.data.ndim >= 2:
-                if self.step_counter % args.lozo_step_interval == 0:
+                if (name not in self.v_matrices) or (self.step_counter % args.lozo_step_interval == 0):
                     v = self.random_bernoulli_matrix(m=param.data.size(1) // args.channel_scale, n=args.lozo_rank, device=param.data.device, dtype=param.data.dtype)
                 else:
                     v = self.v_matrices[name]
@@ -196,7 +196,7 @@ class LQZOTrainer(QZOTrainer):
         if args.train_unquantized:
             for name, param in self.fp16_to_optimize['regular']:
                 if param.data.ndim >= 2:
-                    if self.step_counter % args.lozo_step_interval == 0:
+                    if (name not in self.v_matrices) or (self.step_counter % args.lozo_step_interval == 0):
                         v = self.random_bernoulli_matrix(m=param.data.size(1), n=args.lozo_rank, device=param.data.device, dtype=param.data.dtype)
                         if self.args.momentum_lozo:
                              # LoZO Momentum mixing logic (simplified)
@@ -217,13 +217,6 @@ class LQZOTrainer(QZOTrainer):
                         pass
                     else:
                         grad_est = self.projected_grad * (u @ v.t()) / (args.lozo_rank**0.5)
-                    
-                    # For momentum_u, grad_est is just 'u' scaled, and we reconstruct later.
-                    # Original code separates these clearly.
-                    # Let's revert to separate implementations if needed for exactness.
-                    
-                    # Using the standard "momentum" block logic from original code:
-                    grad_est = self.projected_grad * (u @ v.t()) / (args.lozo_rank**0.5)
                 else:
                     z = torch.normal(mean=0, std=1, size=param.data.size(), device=param.data.device, dtype=param.data.dtype)
                     grad_est = self.projected_grad * z
@@ -233,7 +226,7 @@ class LQZOTrainer(QZOTrainer):
         # 2. Scales
         for name, param in self.fp16_to_optimize['scales']:
             if param.data.ndim >= 2:
-                if self.step_counter % args.lozo_step_interval == 0:
+                if (name not in self.v_matrices) or (self.step_counter % args.lozo_step_interval == 0):
                     v = self.random_bernoulli_matrix(m=param.data.size(1) // args.channel_scale, n=args.lozo_rank, device=param.data.device, dtype=param.data.dtype)
                     if self.args.momentum_lozo:
                          m_buf = self.fp16_to_optimize_momentum['scales'][name]
