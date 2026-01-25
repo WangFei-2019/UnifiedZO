@@ -20,7 +20,7 @@
 # from arguments import ZOTrainingArguments
 # from tasks import get_task
 # from utils import process_dataset
-# from trainer.mezo_trainer import MeZOTrainer
+# from zo_core.trainer.mezo_trainer import MeZOTrainer
 
 # # =============================================================================
 # # Helper Class: 继承 MeZOTrainer 以复用其核心扰动逻辑
@@ -332,7 +332,7 @@ sys.path.append(os.getcwd())
 from arguments import ZOTrainingArguments
 from tasks import get_task
 from utils import process_dataset
-from trainer.mezo_trainer import MeZOTrainer
+from zo_core.trainer.mezo_trainer import MeZOTrainer
 
 # =============================================================================
 # Helper Class

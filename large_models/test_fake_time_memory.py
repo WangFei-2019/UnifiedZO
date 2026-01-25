@@ -13,7 +13,7 @@ from peft import get_peft_model, LoraConfig, TaskType
 
 # Import modules from the refactored code (ZO_all_code)
 from arguments import ZOTrainingArguments
-from trainer import get_trainer_class
+from zo_core.trainer import get_trainer_class
 
 # =============================================================================
 # 1. Profiled Step Functions
@@ -896,7 +896,7 @@ def main_test(
         peft_config = LoraConfig(task_type=TaskType.CAUSAL_LM, inference_mode=False, r=args.lora_r, lora_alpha=args.lora_alpha, lora_dropout=0.0)
         model = get_peft_model(model, peft_config)
     elif peft_mode == "prefix":
-        from tuners.prefix import PrefixTuning 
+        from zo_core.tuners.prefix import PrefixTuning 
         PrefixTuning(model, num_prefix=args.num_prefix, reparam=args.reparam, float16=load_float16, init_by_real_act=args.prefix_init_by_real_act)
 
     # 4. Initialize Trainer
@@ -961,15 +961,15 @@ def main_test(
     # Select the correct Forward Wrapper based on the method
     if method in ["pzo", "adapzo"]:
         # PZO-based methods require a specific wrapper to extract gradients and states
-        from trainer.utils import forward_wrap_with_option_len_pzo
+        from zo_core.trainer.utils import forward_wrap_with_option_len_pzo
         model.forward = forward_wrap_with_option_len_pzo.__get__(model, type(model))
     elif method in ["fzoo", "adafzoo"]:
         # FZOO-based methods use a dedicated wrapper (handling 'n' argument)
-        from trainer.utils import forward_wrap_with_option_len_fzoo
+        from zo_core.trainer.utils import forward_wrap_with_option_len_fzoo
         model.forward = forward_wrap_with_option_len_fzoo.__get__(model, type(model))
     else:
         # Other methods (MeZO, LoZO, DiZO, QZO, LQZO, etc.) use the generic wrapper
-        from trainer.utils import forward_wrap_with_option_len
+        from zo_core.trainer.utils import forward_wrap_with_option_len
         model.forward = forward_wrap_with_option_len.__get__(model, type(model))
 
     # 5. Inputs
