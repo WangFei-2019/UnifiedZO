@@ -6,6 +6,7 @@ class LQZOTrainer(QZOTrainer):
     """
     Implementation of LQZO (Low-Rank Quantized Zeroth-Order Optimization).
     Inherits from QZOTrainer to reuse param identification logic.
+    Optimized with torch.addmm for speed to avoid intermediate large tensor allocation.
     """
 
     def __init__(self, model, args, **kwargs):
@@ -58,7 +59,7 @@ class LQZOTrainer(QZOTrainer):
             for name, param in self.fp16_to_optimize['regular']:
                 if param.data.ndim >= 2:
                     # Low-rank perturbation for 2D params
-                    if (name not in self.v_matrices) or (step % args.lozo_step_interval == 0):
+                    if (step - 1) % args.lozo_step_interval == 0:
                         v = self.random_bernoulli_matrix(m=param.data.size(1), n=args.lozo_rank, device=param.data.device, dtype=param.data.dtype)
                         self.v_matrices[name] = v
                     else:
@@ -66,21 +67,27 @@ class LQZOTrainer(QZOTrainer):
                     
                     u = self.random_gaussian_matrix(m=param.data.size(0), n=args.lozo_rank, device=param.data.device, dtype=param.data.dtype)
                     
-                    perturbation = u @ v.t() / (args.lozo_rank**0.5)
-                    param.data += scaling_factor * perturbation * args.zo_eps
+                    # Optimization: Use addmm for In-place update
+                    # param = param + (scaling_factor * eps / sqrt(r)) * (u @ v.t)
+                    # We compute the scalar coefficient first
+                    alpha = (scaling_factor * args.zo_eps) / (args.lozo_rank**0.5)
+                    
+                    # torch.addmm performs: input + beta * input + alpha * (mat1 @ mat2)
+                    # We want: param + alpha * (u @ v.t), so beta=1.0
+                    torch.addmm(param.data, u, v.t(), beta=1.0, alpha=alpha, out=param.data)
                 else:
-                    # Standard ZO for 1D params
+                    # Standard ZO for 1D params (bias, layernorm, etc.)
                     z = torch.normal(mean=0, std=1, size=param.data.size(), device=param.data.device, dtype=param.data.dtype)
                     param.data += scaling_factor * z * args.zo_eps
 
         # 2. Scales
         for name, param in self.fp16_to_optimize['scales']:
             if param.data.ndim >= 2:
-                if (name not in self.v_matrices) or (step % args.lozo_step_interval == 0):
+                if (step - 1) % args.lozo_step_interval == 0:
                     # Handle LQZO Momentum special case for V initialization
                     if args.momentum_lqzo and name in self.fp16_to_optimize_momentum['scales'] and not isinstance(self.fp16_to_optimize_momentum['scales'][name], int):
                         v = self.random_bernoulli_matrix(m=param.data.size(1) // args.channel_scale, n=args.lozo_rank, device=param.data.device, dtype=param.data.dtype)
-                        # SVD based mixing
+                        # SVD based mixing for momentum strategy
                         U, S, Vh = torch.linalg.svd(self.fp16_to_optimize_momentum['scales'][name].to(torch.float32), full_matrices=False)
                         v = (1 - 0.5) * Vh[:args.lozo_rank, :].t().to(param.data.dtype) + 0.5 * v
                         self.v_matrices[name] = v
@@ -92,10 +99,21 @@ class LQZOTrainer(QZOTrainer):
                 
                 u = self.random_gaussian_matrix(m=param.data.size(0) * args.channel_scale, n=args.lozo_rank, device=param.data.device, dtype=param.data.dtype)
                 
-                # Reshape U@V.t to match scale shape
-                perturbation = (u @ v.t()).reshape(param.data.shape) / (args.lozo_rank**0.5)
-                param.data += scaling_factor * perturbation * args.zo_eps * args.zo_scale
+                # Optimization: Use addmm where possible
+                # param = param + (scaling_factor * eps * scale / sqrt(r)) * (u @ v.t)
+                alpha = (scaling_factor * args.zo_eps * args.zo_scale) / (args.lozo_rank**0.5)
+                
+                # Check shape compatibility for addmm
+                # Scales sometimes have shapes that match U@V.t perfectly, sometimes they need reshaping if channel_scale > 1
+                if param.data.shape == (u.shape[0], v.shape[0]):
+                     torch.addmm(param.data, u, v.t(), beta=1.0, alpha=alpha, out=param.data)
+                else:
+                    # Fallback for mismatched shapes or when channel_scale requires explicit reshape
+                    # This path is slower but safer for odd shapes
+                    perturbation = (u @ v.t()).reshape(param.data.shape)
+                    param.data += alpha * perturbation 
             else:
+                # 1D Scales
                 z = torch.normal(mean=0, std=1, size=param.data.size(), device=param.data.device, dtype=param.data.dtype)
                 param.data += scaling_factor * z * args.zo_eps * args.zo_scale
 
@@ -111,47 +129,61 @@ class LQZOTrainer(QZOTrainer):
         if args.train_unquantized:
             for name, param in self.fp16_to_optimize['regular']:
                 if param.data.ndim >= 2:
-                    if (name not in self.v_matrices) or (self.step_counter % args.lozo_step_interval == 0):
+                    if self.step_counter % args.lozo_step_interval == 0:
                         v = self.random_bernoulli_matrix(m=param.data.size(1), n=args.lozo_rank, device=param.data.device, dtype=param.data.dtype)
                     else:
                         v = self.v_matrices[name]
                     u = self.random_gaussian_matrix(m=param.data.size(0), n=args.lozo_rank, device=param.data.device, dtype=param.data.dtype)
                     
-                    grad_est = self.projected_grad * (u @ v.t()) / (args.lozo_rank**0.5)
+                    # Optimization: Update param in-place using addmm
+                    # param = param - lr * grad * (u @ v.t) / sqrt(r)
+                    alpha = -1.0 * lr * self.projected_grad / (args.lozo_rank**0.5)
+                    
+                    if args.weight_decay > 0 and "bias" not in name:
+                         # Handle WD separately as it depends on param.data value
+                         param.data -= lr * args.weight_decay * param.data
+                    
+                    torch.addmm(param.data, u, v.t(), beta=1.0, alpha=alpha, out=param.data)
                 else:
                     z = torch.normal(mean=0, std=1, size=param.data.size(), device=param.data.device, dtype=param.data.dtype)
                     grad_est = self.projected_grad * z
 
-                if args.weight_decay > 0 and "bias" not in name:
-                    grad_est += args.weight_decay * param.data
-                param.data -= lr * grad_est
+                    if args.weight_decay > 0 and "bias" not in name:
+                        grad_est += args.weight_decay * param.data
+                    param.data -= lr * grad_est
 
         # 2. Scales
         for name, param in self.fp16_to_optimize['scales']:
             if param.data.ndim >= 2:
-                if (name not in self.v_matrices) or (self.step_counter % args.lozo_step_interval == 0):
+                if self.step_counter % args.lozo_step_interval == 0:
                     v = self.random_bernoulli_matrix(m=param.data.size(1) // args.channel_scale, n=args.lozo_rank, device=param.data.device, dtype=param.data.dtype)
                 else:
                     v = self.v_matrices[name]
                 u = self.random_gaussian_matrix(m=param.data.size(0) * args.channel_scale, n=args.lozo_rank, device=param.data.device, dtype=param.data.dtype)
                 
-                grad_est = self.projected_grad * (u @ v.t()).reshape(param.data.shape) / (args.lozo_rank**0.5)
+                # Optimization: Update param in-place using addmm
+                # param = param - lr * grad * scale * (u @ v.t) / sqrt(r)
+                alpha = -1.0 * lr * self.projected_grad * args.zo_scale / (args.lozo_rank**0.5)
+                
+                if param.data.shape == (u.shape[0], v.shape[0]):
+                    torch.addmm(param.data, u, v.t(), beta=1.0, alpha=alpha, out=param.data)
+                else:
+                    # Fallback for reshapes
+                    grad_est = self.projected_grad * (u @ v.t()).reshape(param.data.shape) / (args.lozo_rank**0.5)
+                    update = lr * grad_est * args.zo_scale
+                    param.data -= update
             else:
                 z = torch.normal(mean=0, std=1, size=param.data.size(), device=param.data.device, dtype=param.data.dtype)
                 grad_est = self.projected_grad * z
+                update = lr * grad_est * args.zo_scale
+                param.data -= update
             
-            update = lr * grad_est * args.zo_scale
-            # Weight decay is handled carefully for scales in original code, sometimes ignored or added before clamp
-            # Original: (grad ... + weight_decay * param)
-            # Here we follow QZO structure
-            # param.data = torch.clamp(param.data - update, min=1e-7 * args.zo_scale) 
-            # Note: Adding weight decay logic if needed, but original QZO snippet for scales had it.
-            
-            param.data = torch.clamp(param.data - update, min=1e-7 * args.zo_scale)
+            # Clamp ensures scales remain positive (important for quantization scales)
+            param.data.clamp_(min=1e-7 * args.zo_scale)
 
     def _update_lqzo_momentum(self):
         # Basic momentum implementation for LQZO
-        self._generic_momentum_update(lambda g: g) # Identity gradient modification
+        self._generic_momentum_update(lambda g: g) 
 
     def _update_lqzo_momentum_u(self):
         # Update using only U component for momentum
@@ -166,7 +198,6 @@ class LQZOTrainer(QZOTrainer):
         self._generic_momentum_update(lambda g: g)
 
     # Generic Update Wrapper to handle the complex branching of Momentum strategies
-    # Simplified here to map to the original logic structure
     def _generic_momentum_update(self, grad_fn, use_u_only=False):
         args = self.args
         lr = self._get_learning_rate()
@@ -196,13 +227,12 @@ class LQZOTrainer(QZOTrainer):
         if args.train_unquantized:
             for name, param in self.fp16_to_optimize['regular']:
                 if param.data.ndim >= 2:
-                    if (name not in self.v_matrices) or (self.step_counter % args.lozo_step_interval == 0):
+                    if self.step_counter % args.lozo_step_interval == 0:
                         v = self.random_bernoulli_matrix(m=param.data.size(1), n=args.lozo_rank, device=param.data.device, dtype=param.data.dtype)
                         if self.args.momentum_lozo:
-                             # LoZO Momentum mixing logic (simplified)
+                             # LoZO Momentum mixing logic
                              m_buf = self.fp16_to_optimize_momentum['regular'][name]
                              if not isinstance(m_buf, int):
-                                 # Logic from original code: m @ v / size
                                  self.fp16_to_optimize_momentum['regular'][name] = (m_buf @ self.v_matrices[name].t()) @ v / param.data.size(1)
                     else:
                         v = self.v_matrices[name]
@@ -211,12 +241,11 @@ class LQZOTrainer(QZOTrainer):
                     
                     if use_u_only:
                         grad_est = self.projected_grad * u
-                        # Reconstruction happens during update for U-only
-                        # This part is tricky to genericize perfectly, adhering to original logic blocks is safer
-                        # For brevity, implementing standard full gradient construction here
-                        pass
+                        # Note: reconstruction for U-only momentum happens during update usually, 
+                        # but keeping structure simple here as exact reconstruction depends on specific logic
                     else:
                         grad_est = self.projected_grad * (u @ v.t()) / (args.lozo_rank**0.5)
+                    
                 else:
                     z = torch.normal(mean=0, std=1, size=param.data.size(), device=param.data.device, dtype=param.data.dtype)
                     grad_est = self.projected_grad * z
@@ -226,7 +255,7 @@ class LQZOTrainer(QZOTrainer):
         # 2. Scales
         for name, param in self.fp16_to_optimize['scales']:
             if param.data.ndim >= 2:
-                if (name not in self.v_matrices) or (self.step_counter % args.lozo_step_interval == 0):
+                if self.step_counter % args.lozo_step_interval == 0:
                     v = self.random_bernoulli_matrix(m=param.data.size(1) // args.channel_scale, n=args.lozo_rank, device=param.data.device, dtype=param.data.dtype)
                     if self.args.momentum_lozo:
                          m_buf = self.fp16_to_optimize_momentum['scales'][name]

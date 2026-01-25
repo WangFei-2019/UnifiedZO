@@ -423,6 +423,82 @@ def profiled_pzo_step(self, model, inputs, num_items_in_batch=None):
     return loss1
 
 # =============================================================================
+# QZO & LQZO Profiled Steps
+# =============================================================================
+
+def profiled_qzo_step(self, model, inputs, num_items_in_batch=None):
+    """
+    QZO training step with detailed timing profiling.
+    Mimics standard ZO step but operates on quantized scales.
+    """
+    stats = {"perturb": 0.0, "forward": 0.0, "update": 0.0}
+    
+    self.zo_random_seed = np.random.randint(1000000000)
+    
+    # === Perturb (+) ===
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    self._perturb_qzo(scaling_factor=1)
+    torch.cuda.synchronize()
+    stats["perturb"] += time.perf_counter() - t0
+    
+    # === Forward (+) ===
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    loss1 = self.zo_forward(model, inputs)
+    torch.cuda.synchronize()
+    stats["forward"] += time.perf_counter() - t0
+    
+    # === Perturb (-) ===
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    self._perturb_qzo(scaling_factor=-2) # Net -1
+    torch.cuda.synchronize()
+    stats["perturb"] += time.perf_counter() - t0
+    
+    # === Forward (-) ===
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    loss2 = self.zo_forward(model, inputs)
+    torch.cuda.synchronize()
+    stats["forward"] += time.perf_counter() - t0
+    
+    self.projected_grad = ((loss1 - loss2) / (2 * self.args.zo_eps)).item()
+    
+    # === Restore (+) ===
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    self._perturb_qzo(scaling_factor=1) # Net 0
+    torch.cuda.synchronize()
+    stats["perturb"] += time.perf_counter() - t0
+    
+    # === Update ===
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    if self.args.momentum:
+        self._update_qzo_momentum()
+    else:
+        self._update_qzo()
+    torch.cuda.synchronize()
+    stats["update"] += time.perf_counter() - t0
+    
+    self._last_step_stats = stats
+    return loss1
+
+def profiled_lqzo_step(self, model, inputs, num_items_in_batch=None):
+    """
+    LQZO training step with detailed timing profiling.
+    Uses low-rank perturbation logic internally.
+    """
+    # LQZO structure is identical to QZO in the Trainer (via inheritance),
+    # but the internal _perturb_qzo method dispatches to _perturb_lqzo.
+    # We reuse the same profiling wrapper.
+    if hasattr(self, "step_counter"):
+        self.step_counter += 1
+        
+    return profiled_qzo_step(self, model, inputs, num_items_in_batch)
+
+# =============================================================================
 # Additional Profiled Step Functions for Ada-Series Methods
 # =============================================================================
 
@@ -791,6 +867,8 @@ def main_test(
         hessian_smooth="constant1e-4", 
         sliding_window_length=14, momentum_fb_max=1.0,
         fzoo_n=4, adalezo_k_ratio=0.1,
+        # QZO/LQZO Specifics
+        quant_method="gptq", zo_scale=1.0, clip_zo_grad=True,
     )
 
     if peft_mode == "lora":
@@ -804,7 +882,8 @@ def main_test(
         print(f"Loading model: {model_path}...")
         model = AutoModelForCausalLM.from_pretrained(model_path, device_map="auto", torch_dtype=torch.float16 if load_float16 else torch.float32)
     except Exception as e:
-        print(f"Warning: Could not load {model_path}. Creating Dummy OPT-1.3B.")
+        print(f"Warning: Could not load {model_path}. Creating Dummy OPT-1.3B. Error: {e}")
+        # Note: QZO won't work on dummy non-quantized model, but we keep fallback for generic testing
         config = AutoConfig.from_pretrained("facebook/opt-1.3b")
         model = AutoModelForCausalLM.from_config(config)
         if load_float16: model = model.half()
@@ -821,8 +900,10 @@ def main_test(
         PrefixTuning(model, num_prefix=args.num_prefix, reparam=args.reparam, float16=load_float16, init_by_real_act=args.prefix_init_by_real_act)
 
     # 4. Initialize Trainer
-    tokenizer = AutoTokenizer.from_pretrained(model_path) 
-    tokenizer.pad_token = tokenizer.eos_token
+    tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True) 
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+        
     TrainerClass = get_trainer_class(args)
     
     trainer = TrainerClass(
@@ -851,6 +932,11 @@ def main_test(
         trainer.training_step = types.MethodType(profiled_pzo_step, trainer)
     elif method == "dizo":
         trainer.training_step = types.MethodType(profiled_dizo_step, trainer)
+    # --- QZO / LQZO ---
+    elif method == "qzo":
+        trainer.training_step = types.MethodType(profiled_qzo_step, trainer)
+    elif method == "lqzo":
+        trainer.training_step = types.MethodType(profiled_lqzo_step, trainer)
     # --- Ada Series ---
     elif method == "adalezo":
         trainer.training_step = types.MethodType(profiled_adalezo_step, trainer)
@@ -882,7 +968,7 @@ def main_test(
         from trainer.utils import forward_wrap_with_option_len_fzoo
         model.forward = forward_wrap_with_option_len_fzoo.__get__(model, type(model))
     else:
-        # Other methods (MeZO, LoZO, DiZO, etc.) use the generic wrapper
+        # Other methods (MeZO, LoZO, DiZO, QZO, LQZO, etc.) use the generic wrapper
         from trainer.utils import forward_wrap_with_option_len
         model.forward = forward_wrap_with_option_len.__get__(model, type(model))
 
@@ -908,11 +994,11 @@ def main_test(
     print(f"{'-'*105}")
 
     # Warmup
-    try:
-        trainer.training_step(model, dummy_inputs)
-    except Exception as e:
-        print(f"Error in warmup: {e}")
-        return
+    # try:
+    trainer.training_step(model, dummy_inputs)
+    # except Exception as e:
+    #     print(f"Error in warmup: {e}")
+    #     return
 
     for i in range(steps):
         # Reset memory stats
@@ -936,7 +1022,8 @@ def main_test(
         overhead_mb = (peak_gb - static_mem_gb) * 1024
 
         # Print Row
-        print(f"{i+1:<5} | {loss.item():<10.4f} | {current_stats['perturb']:<12.5f} | {current_stats['forward']:<12.5f} | {current_stats['update']:<12.5f} | {peak_gb:<10.4f} | {overhead_mb:<12.2f}")
+        loss_val = loss.item() if isinstance(loss, torch.Tensor) else loss
+        print(f"{i+1:<5} | {loss_val:<10.4f} | {current_stats['perturb']:<12.5f} | {current_stats['forward']:<12.5f} | {current_stats['update']:<12.5f} | {peak_gb:<10.4f} | {overhead_mb:<12.2f}")
 
         # Accumulate
         stats_acc["perturb"].append(current_stats['perturb'])
@@ -961,4 +1048,5 @@ def main_test(
 
 if __name__ == "__main__":
     Fire(main_test)
+    # Example usage:
     # CUDA_VISIBLE_DEVICES=0 python test_fake_time_memory.py 16 256 mezo none 20 True /workspace/wangfei154/models/facebook/opt-13b
