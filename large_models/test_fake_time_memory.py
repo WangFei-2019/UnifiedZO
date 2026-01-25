@@ -495,7 +495,7 @@ def profiled_lqzo_step(self, model, inputs, num_items_in_batch=None):
     # We reuse the same profiling wrapper.
     if hasattr(self, "step_counter"):
         self.step_counter += 1
-        
+
     return profiled_qzo_step(self, model, inputs, num_items_in_batch)
 
 # =============================================================================
