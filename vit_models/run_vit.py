@@ -5,13 +5,15 @@ import json
 from dataclasses import asdict
 import wandb
 import torch
+import numpy as np
 from transformers import (
     AutoConfig, 
     AutoImageProcessor, 
     AutoModelForImageClassification, 
     HfArgumentParser, 
     DefaultDataCollator,
-    set_seed
+    set_seed,
+    EvalPrediction
 )
 
 # --- Path Setup ---
@@ -41,6 +43,18 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)]
 )
 logger = logging.getLogger(__name__)
+
+def compute_metrics(p: EvalPrediction):
+    """
+    Computes accuracy for classification tasks.
+    Args:
+        p (EvalPrediction): Contains predictions and label_ids.
+    Returns:
+        dict: A dictionary containing the accuracy metric.
+    """
+    preds = np.argmax(p.predictions, axis=1)
+    accuracy = (preds == p.label_ids).astype(np.float32).mean().item()
+    return {"accuracy": accuracy}
 
 def main():
     """
@@ -156,6 +170,7 @@ def main():
         eval_dataset=eval_dataset,
         tokenizer=image_processor, # Passing processor as tokenizer for compatibility logging
         data_collator=collator,
+        compute_metrics=compute_metrics
     )
 
     # 7. Training Loop

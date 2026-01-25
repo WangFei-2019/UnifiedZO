@@ -52,12 +52,27 @@ class VisionDatasetWrapper(Dataset):
             Compose: A composition of image transformations.
         """
         # Retrieve image size from processor configuration
-        # ViT usually defaults to 224x224
-        if hasattr(self.processor, "size") and "height" in self.processor.size:
-            size = (self.processor.size["height"], self.processor.size["width"])
-        elif hasattr(self.processor, "crop_size"):
-             size = (self.processor.crop_size["height"], self.processor.crop_size["width"])
-        else:
+        # Robust handling for different Hugging Face processor versions
+        size = None
+        
+        # Strategy 1: Check 'size' attribute (Standard in newer transformers)
+        # Formats: {"height": 224, "width": 224} OR {"shortest_edge": 224}
+        if hasattr(self.processor, "size"):
+            if "height" in self.processor.size and "width" in self.processor.size:
+                size = (self.processor.size["height"], self.processor.size["width"])
+            elif "shortest_edge" in self.processor.size:
+                # If only shortest_edge is defined, we typically assume a square crop for ViT
+                s = self.processor.size["shortest_edge"]
+                size = (s, s)
+
+        # Strategy 2: Check 'crop_size' attribute (Legacy/Deprecated in some models)
+        if size is None and hasattr(self.processor, "crop_size"):
+            if "height" in self.processor.crop_size and "width" in self.processor.crop_size:
+                size = (self.processor.crop_size["height"], self.processor.crop_size["width"])
+
+        # Strategy 3: Fallback with Warning
+        if size is None:
+            logger.warning(f"Could not detect image size from processor config (checked 'size' and 'crop_size'). Defaulting to (224, 224).")
             size = (224, 224) 
         
         # Retrieve normalization statistics
