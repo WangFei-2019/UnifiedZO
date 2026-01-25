@@ -1,6 +1,11 @@
-import logging
 import os
 import sys
+
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)
+sys.path.append(parent_dir)
+
+import logging
 import json
 from dataclasses import asdict
 import wandb
@@ -16,16 +21,6 @@ from transformers import (
     EvalPrediction
 )
 
-# --- Path Setup ---
-# Add the parent directory to sys.path to allow importing from 'zo_core'
-# structure:
-# root/
-#   zo_core/
-#   vit_models/
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
-# --- Core Imports ---
-# Importing generic ZO components (Arguments, Trainer Factory) from the core module
 from zo_core.arguments import ZOTrainingArguments
 from zo_core.trainer import get_trainer_class
 from zo_core.utils import result_file_tag, write_metrics_to_file

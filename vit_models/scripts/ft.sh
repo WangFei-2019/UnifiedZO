@@ -2,49 +2,45 @@
 
 # --- Defaults ---
 MODEL=${MODEL:-google/vit-base-patch16-224}
-# Extract short name for tagging (e.g., vit-base-patch16-224)
 MODEL_SHORT=(${MODEL//\// })
 MODEL_SHORT="${MODEL_SHORT[-1]}"
 
 TASK=${TASK:-cifar10}
-MODE=${MODE:-ft} # ft (Full Tuning) or lora
+MODE=${MODE:-ft} # ft (Full Fine-Tuning) or lora
 
-# Hyperparameters
-BS=${BS:-16}        # Batch Size
-LR=${LR:-1e-5}      # Learning Rate
-EPS=${EPS:-1e-3}    # ZO Epsilon
+# Hyperparameters (Standard FT usually uses smaller LR)
+BS=${BS:-16}
+LR=${LR:-2e-5}      # Standard Fine-tuning LR
 SEED=${SEED:-42}
-STEPS=${STEPS:-20000}
-EVAL_STEPS=${EVAL_STEPS:-1000}
+STEPS=${STEPS:-10000} # FT usually converges faster than ZO
+EVAL_STEPS=${EVAL_STEPS:-500}
 
-# --- PEFT / Mode Logic ---
+# --- PEFT Logic ---
 if [ "$MODE" == "lora" ]; then
-    # LoRA specific defaults if not overridden
-    LR=${LR:-1e-4}
+    LR=${LR:-1e-4} # LoRA often handles higher LR
     PEFT_ARGS="--lora --lora_r 8 --lora_alpha 16 --lora_dropout 0.1"
 else
     PEFT_ARGS=""
 fi
 
 # Generate Experiment Tag
-TAG=mezo-${MODE}-${TASK}-${MODEL_SHORT}-lr${LR}-eps${EPS}-seed${SEED}
-OUTPUT_DIR="result/vit_mezo/${TAG}"
+TAG=ft-${MODE}-${TASK}-${MODEL_SHORT}-lr${LR}-seed${SEED}
+OUTPUT_DIR="result/vit_ft/${TAG}"
 
-echo "Running ViT MeZO | Task: $TASK | Mode: $MODE | Model: $MODEL"
-echo "Output Dir: $OUTPUT_DIR"
+echo "Running ViT Fine-Tuning (BP) | Task: $TASK | Mode: $MODE | Model: $MODEL"
 
 # --- Execution ---
+# trainer="regular" triggers standard backpropagation (First-Order)
 python vit_models/run_vit.py \
     --model_name $MODEL \
     --task_name $TASK \
     --output_dir $OUTPUT_DIR \
     --tag $TAG \
-    --trainer mezo \
+    --trainer regular \
     --train_as_classification True \
     --num_train 1000 \
     --num_eval 100 \
     --learning_rate $LR \
-    --zo_eps $EPS \
     --max_steps $STEPS \
     --logging_steps 10 \
     --save_steps $EVAL_STEPS \
@@ -54,5 +50,6 @@ python vit_models/run_vit.py \
     --seed $SEED \
     --report_to wandb \
     --save_total_limit 1 \
+    --save_model True \
     $PEFT_ARGS \
     "$@"

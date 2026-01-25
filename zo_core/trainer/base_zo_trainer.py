@@ -3,7 +3,7 @@ import torch
 import numpy as np
 from transformers import Trainer
 from transformers.utils import logging
-from metrics import f1
+from zo_core.metrics import f1
 logger = logging.get_logger(__name__)
 
 class BaseZOTrainer(Trainer):

@@ -1,29 +1,67 @@
 #!/bin/bash
 
-MODEL_NAME="google/vit-base-patch16-224"
-TASK_NAME="cifar10"
-OUTPUT_DIR="result/vit_lqzo_${TASK_NAME}"
+# --- Defaults ---
+MODEL=${MODEL:-google/vit-base-patch16-224}
+MODEL_SHORT=(${MODEL//\// })
+MODEL_SHORT="${MODEL_SHORT[-1]}"
+
+TASK=${TASK:-cifar10}
+MODE=${MODE:-ft}
+
+# LQZO Specific Defaults
+LOZO_RANK=${LOZO_RANK:-2}
+CHANNEL_SCALE=${CHANNEL_SCALE:-1}
+MOMENTUM=${MOMENTUM:-True}
+
+# Hyperparameters
+BS=${BS:-16}
+LR=${LR:-1e-5}
+EPS=${EPS:-1e-3}
+SEED=${SEED:-42}
+STEPS=${STEPS:-20000}
+EVAL_STEPS=${EVAL_STEPS:-1000}
+
+# --- PEFT Logic ---
+if [ "$MODE" == "lora" ]; then
+    LR=${LR:-1e-4}
+    PEFT_ARGS="--lora --lora_r 8 --lora_alpha 16"
+else
+    PEFT_ARGS=""
+fi
+
+# LQZO Args Construction
+EXTRA_ZO_ARGS="--lozo_rank $LOZO_RANK --channel_scale $CHANNEL_SCALE"
+if [ "$MOMENTUM" = "True" ]; then
+    EXTRA_ZO_ARGS="$EXTRA_ZO_ARGS --momentum_lqzo"
+fi
+
+# Generate Experiment Tag
+TAG=lqzo-${MODE}-rank${LOZO_RANK}-${TASK}-lr${LR}-eps${EPS}
+OUTPUT_DIR="result/vit_lqzo/${TAG}"
+
+echo "Running ViT LQZO | Task: $TASK | Rank: $LOZO_RANK | Momentum: $MOMENTUM"
 
 # --- Execution ---
-# Run LQZO training.
-# Key Arguments:
-#   --lozo_rank: The rank 'r' for the low-rank decomposition.
-#   --channel_scale: Scale factor for channel-wise reshaping in LQZO.
-#   --momentum_lqzo: Enables specific momentum logic for the low-rank update.
 python vit_models/run_vit.py \
-    --model_name $MODEL_NAME \
-    --task_name $TASK_NAME \
+    --model_name $MODEL \
+    --task_name $TASK \
     --output_dir $OUTPUT_DIR \
+    --tag $TAG \
+    --trainer lqzo \
+    --train_as_classification True \
     --num_train 1000 \
     --num_eval 100 \
-    --trainer lqzo \
-    --learning_rate 1e-5 \
-    --zo_eps 1e-3 \
-    --lozo_rank 2 \
-    --channel_scale 1 \
-    --momentum_lqzo True \
-    --quant_method none \
-    --per_device_train_batch_size 16 \
-    --train_as_classification True \
+    --learning_rate $LR \
+    --zo_eps $EPS \
+    --max_steps $STEPS \
+    --logging_steps 10 \
+    --save_steps $EVAL_STEPS \
+    --eval_steps $EVAL_STEPS \
+    --per_device_train_batch_size $BS \
+    --per_device_eval_batch_size 32 \
+    --seed $SEED \
     --report_to wandb \
-    --tag "lqzo_benchmark"
+    --save_total_limit 1 \
+    $PEFT_ARGS \
+    $EXTRA_ZO_ARGS \
+    "$@"
