@@ -7,13 +7,17 @@ from typing import Dict, Any, Optional
 # Initialize logger for the module
 logger = logging.getLogger(__name__)
 
-# --- Configure your dataset root directory ---
-# Ensure that the 'uoft-cs/cifar10' or 'cifar10' folder exists under this path
-DATASET_DIR = "/workspace/wangfei154/datasets/" 
+# --- Configuration ---
+# Allow dynamic configuration via environment variables for flexibility across different compute environments.
+# Defaults to the specific user path if the environment variable is not set.
+DATASET_DIR = os.getenv("DATASET_DIR", "/workspace/wangfei154/datasets/")
 
 class VisionDataset:
     """
-    Base class for vision datasets handling data loading and metadata extraction.
+    Base class for vision datasets, managing data loading, split assignment, and metadata extraction.
+    
+    This class implements a multi-strategy loading mechanism to ensure robustness across 
+    different storage formats (Arrow, Parquet, Python scripts) and environments (Local vs. Online).
     """
     def __init__(self, dataset_name: str, config_name: Optional[str] = None):
         self.dataset_name = dataset_name
@@ -28,21 +32,21 @@ class VisionDataset:
 
     def _load_dataset(self):
         """
-        Loads the dataset with offline support.
-        Priority:
-        1. Local path via load_from_disk (Arrow format)
-        2. Local path via load_dataset("parquet") (Parquet format - Target case)
-        3. Local path via load_dataset (Script format with .py file)
-        4. Hugging Face Hub (Online)
+        Executes the dataset loading pipeline with the following priority:
+        1. Local 'save_to_disk' format (Arrow).
+        2. Local Parquet files (automatically detected).
+        3. Local standard dataset script (if available).
+        4. Remote Hugging Face Hub (Online fallback).
         """
-        logger.info(f"Loading vision dataset: {self.dataset_name}")
+        logger.info(f"Initiating dataset loading for: {self.dataset_name}")
         
-        # 1. Attempt to construct local path
-        # Compatible with two structures: datasets/cifar10 or datasets/uoft-cs/cifar10
+        # 1. Path Construction
+        # Construct potential local file paths based on the dataset name and the root directory.
         possible_paths = []
         if DATASET_DIR:
+            # Case A: Full relative path (e.g., .../datasets/uoft-cs/cifar-10)
             possible_paths.append(os.path.join(DATASET_DIR, self.dataset_name))
-            # If the name contains a slash (e.g., uoft-cs/cifar10), also try using just the suffix
+            # Case B: Suffix only (e.g., .../datasets/cifar-10) - handles cases where user ignored the namespace.
             if "/" in self.dataset_name:
                 possible_paths.append(os.path.join(DATASET_DIR, self.dataset_name.split("/")[-1]))
 
@@ -50,124 +54,144 @@ class VisionDataset:
         for p in possible_paths:
             if os.path.exists(p):
                 local_path = p
-                logger.info(f"Found local dataset folder at: {local_path}")
+                logger.info(f"Local dataset directory located at: {local_path}")
                 break
         
         raw_datasets = None
         
-        # Strategy 1: load_from_disk (Arrow/save_to_disk format)
+        # Strategy 1: Load pre-saved Arrow format (preferred for speed).
         if local_path and (os.path.exists(os.path.join(local_path, "dataset_dict.json")) or \
                            os.path.exists(os.path.join(local_path, "state.json"))):
-            logger.info("Detected 'save_to_disk' format. Using load_from_disk.")
+            logger.info("Detected 'save_to_disk' (Arrow) format. Executing load_from_disk.")
             try:
                 raw_datasets = load_from_disk(local_path)
             except Exception as e:
-                logger.warning(f"load_from_disk failed: {e}")
+                logger.warning(f"Failed to load from disk: {e}. Proceeding to next strategy.")
 
-        # Strategy 1.5: Parquet Files (Automatic Detection)
-        # Automatically scan for .parquet files in the directory
+        # Strategy 2: Automatic Parquet File Detection.
+        # This is required when datasets are downloaded purely as data files without a loading script.
         if raw_datasets is None and local_path:
-            # Search for parquet files recursively or in the current directory
             parquet_files = glob.glob(os.path.join(local_path, "**", "*.parquet"), recursive=True)
             
             if parquet_files:
-                logger.info(f"Detected {len(parquet_files)} parquet files. Using 'parquet' builder.")
+                logger.info(f"Detected {len(parquet_files)} Parquet files. initializing Parquet builder.")
                 data_files = {}
                 
-                # Simple keyword matching logic for splits
+                # Heuristic mapping of filenames to standard splits.
                 train_files = [f for f in parquet_files if "train" in os.path.basename(f).lower()]
                 test_files = [f for f in parquet_files if "test" in os.path.basename(f).lower() or "val" in os.path.basename(f).lower()]
                 
                 if train_files:
                     data_files["train"] = train_files
                 if test_files:
-                    # CIFAR10 usually names it 'test', but HF datasets standard often maps it to 'validation'.
-                    # We load them here and handle the split naming later.
+                    # Note: We tentatively map 'test'/'val' here; strict split validation occurs later.
                     data_files["test"] = test_files
                 
                 if data_files:
                     try:
-                        # Core modification: Specify engine="pyarrow" and input as "parquet" to load raw files
                         raw_datasets = load_dataset("parquet", data_files=data_files)
                     except Exception as e:
-                        logger.warning(f"Failed to load parquet files: {e}")
+                        logger.warning(f"Parquet loading failed: {e}")
 
-        # Strategy 2: Local Script (If a .py script exists)
+        # Strategy 3: Standard Local Script Loading.
         if raw_datasets is None and local_path:
-            logger.info(f"Attempting standard load_dataset from: {local_path}")
+            logger.info(f"Attempting standard loading from local path: {local_path}")
             try:
                 raw_datasets = load_dataset(local_path, self.config_name, trust_remote_code=True)
             except Exception as e:
-                logger.warning(f"Standard local load failed (expected if no .py script): {e}")
+                logger.warning(f"Standard local loading failed: {e}")
 
-        # Strategy 3: Fallback to Online (Hugging Face Hub)
+        # Strategy 4: Online Fallback (Hugging Face Hub).
         if raw_datasets is None:
-            logger.info("Falling back to Hugging Face Hub (Online)...")
-            raw_datasets = load_dataset(os.path.join(DATASET_DIR, self.dataset_name), self.config_name, trust_remote_code=True)
+            logger.info("Local strategies exhausted. Falling back to Hugging Face Hub (Online).")
+            # Determine correct path logic for online retrieval
+            path_to_load = os.path.join(DATASET_DIR, self.dataset_name) if os.path.exists(os.path.join(DATASET_DIR, self.dataset_name)) else self.dataset_name
+            raw_datasets = load_dataset(path_to_load, self.config_name, trust_remote_code=True)
         
-        # --- Split Assignment ---
+        # --- Split Validation and Assignment ---
         if "train" in raw_datasets:
             self.train_dataset = raw_datasets["train"]
         else:
-            raise ValueError(f"Dataset {self.dataset_name} loaded but missing 'train' split. Available: {raw_datasets.keys()}")
+            raise ValueError(f"Critical Error: Dataset missing 'train' split. Available keys: {raw_datasets.keys()}")
         
-        # Assign Evaluation Split
+        # Standardize evaluation split naming (test vs. validation).
         if "test" in raw_datasets:
             self.eval_dataset = raw_datasets["test"]
         elif "validation" in raw_datasets:
             self.eval_dataset = raw_datasets["validation"]
         else:
-            # If neither test nor validation exists (e.g., parquet matching failed), raise error
-            raise ValueError(f"Dataset must have 'test' or 'validation' split. Available: {raw_datasets.keys()}")
+            raise ValueError(f"Critical Error: Dataset must contain 'test' or 'validation' split. Available keys: {raw_datasets.keys()}")
 
-        # --- Label Metadata Extraction ---
+        # --- Metadata Extraction (Label Mapping) ---
         potential_label_keys = ["label", "labels", "fine_label", "coarse_label"]
         label_key = next((k for k in potential_label_keys if k in self.train_dataset.features), None)
         
         if label_key:
             features = self.train_dataset.features[label_key]
             if hasattr(features, "names"):
+                # Standard case: Features contain ClassLabel metadata.
                 self.labels = features.names
                 self.num_labels = len(self.labels)
                 self.id2label = {i: label for i, label in enumerate(self.labels)}
                 self.label2id = {label: i for i, label in enumerate(self.labels)}
-                logger.info(f"Detected {self.num_labels} classes: {self.labels}")
+                logger.info(f"Successfully extracted {self.num_labels} classes: {self.labels}")
                 
+                # Normalize column name to 'label' for downstream compatibility.
                 if label_key != "label":
                     self.train_dataset = self.train_dataset.rename_column(label_key, "label")
                     self.eval_dataset = self.eval_dataset.rename_column(label_key, "label")
             else:
-                # When loading via Parquet, Label is often just Int, losing names metadata.
-                # For CIFAR-10, we can manually hardcode to fix and prevent errors.
-                if "cifar10" in self.dataset_name.lower() and self.num_labels == 0:
-                    logger.info("Restoring missing CIFAR-10 label metadata...")
+                # Edge Case: Metadata is missing (common with Parquet/Arrow raw loads).
+                # Heuristic restoration for CIFAR-10 to prevent runtime failures.
+                name_clean = self.dataset_name.lower().replace("-", "").replace("/", "")
+                if "cifar10" in name_clean and self.num_labels == 0:
+                    logger.info("Metadata missing. Applying manual restoration for CIFAR-10 labels.")
                     self.labels = ['airplane', 'automobile', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck']
                     self.num_labels = 10
                     self.id2label = {i: label for i, label in enumerate(self.labels)}
                     self.label2id = {label: i for i, label in enumerate(self.labels)}
                 else:
-                    logger.warning("Label feature exists but lacks metadata. Manual mapping might be needed.")
+                    logger.warning("Label feature detected but lacks metadata (names). Manual mapping may be required.")
         else:
-             # If the label column is completely missing in Parquet (rare), try hardcoding based on dataset name
-             logger.warning(f"Could not find label column. Features: {self.train_dataset.features.keys()}")
+             logger.warning(f"Label column not found. Available features: {self.train_dataset.features.keys()}")
 
 class CIFAR10Dataset(VisionDataset):
+    """
+    Wrapper for the CIFAR-10 dataset.
+    Configured to match the directory structure: 'uoft-cs/cifar-10'.
+    """
     def __init__(self):
-        # Use short name to match local directory structure
-        super().__init__(dataset_name="cifar10")
+        super().__init__(dataset_name="uoft-cs/cifar-10")
 
 class CIFAR100Dataset(VisionDataset):
+    """
+    Wrapper for the CIFAR-100 dataset.
+    Configured to match the directory structure: 'uoft-cs/cifar-100'.
+    """
     def __init__(self):
-        super().__init__(dataset_name="cifar100")
+        super().__init__(dataset_name="uoft-cs/cifar-100")
 
 class ImageNetDataset(VisionDataset):
+    """
+    Wrapper for the ImageNet-1k dataset.
+    """
     def __init__(self):
         super().__init__(dataset_name="imagenet-1k")
 
 def get_vision_task(task_name: str) -> VisionDataset:
+    """
+    Factory function to instantiate the appropriate VisionDataset subclass.
+    
+    Args:
+        task_name (str): The identifier for the dataset (e.g., 'cifar10', 'imagenet').
+        
+    Returns:
+        VisionDataset: An initialized dataset object.
+    """
     task_map = {
         "cifar10": CIFAR10Dataset,
-        "uoft-cs/cifar10": CIFAR10Dataset, 
+        "uoft-cs/cifar10": CIFAR10Dataset,
+        "uoft-cs/cifar-10": CIFAR10Dataset, # Support for hyphenated variations
         "cifar100": CIFAR100Dataset,
         "uoft-cs/cifar100": CIFAR100Dataset,
         "imagenet": ImageNetDataset,
@@ -179,5 +203,5 @@ def get_vision_task(task_name: str) -> VisionDataset:
     if normalized_name in task_map:
         return task_map[normalized_name]()
     else:
-        logger.info(f"Task '{task_name}' not explicitly defined. Attempting generic load.")
+        logger.info(f"Task '{task_name}' is not explicitly defined in the map. Attempting generic load.")
         return VisionDataset(dataset_name=task_name)

@@ -33,4 +33,6 @@ python vit_models/run_vit.py \
     --per_device_eval_batch_size $BS \
     --seed $SEED \
     --report_to wandb \
+    --dataloader_num_workers 4 \
+    --dataloader_pin_memory True \
     "$@"

@@ -5,13 +5,13 @@ MODEL=${MODEL:-google/vit-base-patch16-224}
 MODEL_SHORT=(${MODEL//\// })
 MODEL_SHORT="${MODEL_SHORT[-1]}"
 
-TASK=${TASK:-cifar10}
+TASK=${TASK:-uoft-cs/cifar10}
 MODE=${MODE:-ft} # ft (Full Fine-Tuning) or lora
 
 # Hyperparameters (Standard FT usually uses smaller LR)
-BS=${BS:-16}
+BS=${BS:-64}
 LR=${LR:-2e-5}      # Standard Fine-tuning LR
-SEED=${SEED:-42}
+SEED=${SEED:-0}
 STEPS=${STEPS:-10000} # FT usually converges faster than ZO
 EVAL_STEPS=${EVAL_STEPS:-500}
 
@@ -51,5 +51,7 @@ python vit_models/run_vit.py \
     --report_to wandb \
     --save_total_limit 1 \
     --save_model True \
+    --dataloader_num_workers 4 \
+    --dataloader_pin_memory True \
     $PEFT_ARGS \
     "$@"

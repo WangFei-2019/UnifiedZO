@@ -5,7 +5,7 @@ MODEL=${MODEL:-google/vit-base-patch16-224}
 MODEL_SHORT=(${MODEL//\// })
 MODEL_SHORT="${MODEL_SHORT[-1]}"
 
-TASK=${TASK:-cifar10}
+TASK=${TASK:-uoft-cs/cifar10}
 MODE=${MODE:-ft}
 
 # LQZO Specific Defaults
@@ -14,12 +14,12 @@ CHANNEL_SCALE=${CHANNEL_SCALE:-1}
 MOMENTUM=${MOMENTUM:-True}
 
 # Hyperparameters
-BS=${BS:-16}
+BS=${BS:-64}        # Batch Size
 LR=${LR:-1e-5}
 EPS=${EPS:-1e-3}
-SEED=${SEED:-42}
+SEED=${SEED:-0}
 STEPS=${STEPS:-20000}
-EVAL_STEPS=${EVAL_STEPS:-1000}
+EVAL_STEPS=${EVAL_STEPS:-100}
 
 # --- PEFT Logic ---
 if [ "$MODE" == "lora" ]; then
@@ -57,11 +57,14 @@ python vit_models/run_vit.py \
     --logging_steps 10 \
     --save_steps $EVAL_STEPS \
     --eval_steps $EVAL_STEPS \
+    --evaluation_strategy steps \
     --per_device_train_batch_size $BS \
-    --per_device_eval_batch_size 32 \
+    --per_device_eval_batch_size 64 \
     --seed $SEED \
     --report_to wandb \
     --save_total_limit 1 \
+    --dataloader_num_workers 16 \
+    --dataloader_pin_memory True \
     $PEFT_ARGS \
     $EXTRA_ZO_ARGS \
     "$@"
