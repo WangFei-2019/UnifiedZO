@@ -10,8 +10,12 @@ MODE=${MODE:-ft}
 
 # QZO Specific Defaults
 QUANT_METHOD=${QUANT_METHOD:-none} # Options: none (simulated), gptq, aqlm
-ZO_SCALE=${ZO_SCALE:-1.0}          # Scale for step size parameters
+zoquantified_scale=${zoquantified_scale:-1.0}          # Scale for step size parameters
 CLIP_GRAD=${CLIP_GRAD:-True}       # Whether to clip ZO gradients
+
+TRAIN=${TRAIN:-1000}
+DEV=${DEV:-500}
+EVAL=${EVAL:-1000}
 
 # Hyperparameters
 BS=${BS:-64}
@@ -30,7 +34,7 @@ else
 fi
 
 # QZO Args Construction
-EXTRA_ZO_ARGS="--quant_method $QUANT_METHOD --zo_scale $ZO_SCALE --train_unquantized True"
+EXTRA_ZO_ARGS="--quant_method $QUANT_METHOD --zoquantified_scale $zoquantified_scale --train_unquantized True"
 if [ "$CLIP_GRAD" = "True" ]; then
     EXTRA_ZO_ARGS="$EXTRA_ZO_ARGS --clip_zo_grad"
 fi
@@ -49,8 +53,9 @@ python vit_models/run_vit.py \
     --tag $TAG \
     --trainer qzo \
     --train_as_classification True \
-    --num_train 1000 \
-    --num_eval 100 \
+    --num_train $TRAIN \
+    --num_dev $DEV \
+    --num_eval $EVAL \
     --learning_rate $LR \
     --zo_eps $EPS \
     --max_steps $STEPS \
@@ -65,6 +70,8 @@ python vit_models/run_vit.py \
     --save_total_limit 1 \
     --dataloader_num_workers 16 \
     --dataloader_pin_memory True \
+    --load_best_model_at_end True \
+    --metric_for_best_model eval_validation_loss \
     $PEFT_ARGS \
     $EXTRA_ZO_ARGS \
     "$@"

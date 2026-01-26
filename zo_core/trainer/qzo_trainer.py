@@ -45,6 +45,8 @@ class QZOTrainer(BaseZOTrainer):
         if self.args.momentum:
             self._init_momentum_buffers()
 
+        self.args.zoquantified_scale = 2 ** (4 - self.model.config.quantization_config.bits)
+
     def _identify_quantized_params(self):
         """
         Identify which parameters are quantization scales and which are regular float16 params.
@@ -136,8 +138,8 @@ class QZOTrainer(BaseZOTrainer):
         # Perturb Scales (Always)
         for name, param in self.fp16_to_optimize['scales']:
             z = torch.normal(mean=0, std=1, size=param.data.size(), device=param.data.device, dtype=param.data.dtype)
-            # Note: args.zo_scale used here as 'scale' in original code
-            param.data += scaling_factor * z * self.args.zo_eps * self.args.zo_scale
+            # Note: args.zoquantified_scale used here as 'scale' in original code
+            param.data += scaling_factor * z * self.args.zo_eps * self.args.zoquantified_scale
 
     def _update_qzo(self):
         torch.manual_seed(self.zo_random_seed)
@@ -166,8 +168,8 @@ class QZOTrainer(BaseZOTrainer):
             # but standard QZO code uses simple gradient descent with clamping for safety.
             # Original QZO: param.data = torch.clamp(param.data - lr * (grad * z) * scale, min=1e-7 * scale)
             
-            update = lr * (self.projected_grad * z) * self.args.zo_scale
-            param.data = torch.clamp(param.data - update, min=1e-7 * self.args.zo_scale)
+            update = lr * (self.projected_grad * z) * self.args.zoquantified_scale
+            param.data = torch.clamp(param.data - update, min=1e-7 * self.args.zoquantified_scale)
 
     def _update_qzo_momentum(self):
         torch.manual_seed(self.zo_random_seed)
@@ -197,5 +199,5 @@ class QZOTrainer(BaseZOTrainer):
             
             self.fp16_to_optimize_momentum['scales'][name] = beta * self.fp16_to_optimize_momentum['scales'][name] + (1 - beta) * z * self.projected_grad
             
-            update = lr * self.fp16_to_optimize_momentum['scales'][name] * self.args.zo_scale
-            param.data = torch.clamp(param.data - update, min=1e-7 * self.args.zo_scale)
+            update = lr * self.fp16_to_optimize_momentum['scales'][name] * self.args.zoquantified_scale
+            param.data = torch.clamp(param.data - update, min=1e-7 * self.args.zoquantified_scale)

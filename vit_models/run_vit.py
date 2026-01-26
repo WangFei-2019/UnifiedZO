@@ -134,18 +134,26 @@ def main():
     )
     
     logger.info("Processing Evaluation Dataset...")
-    # Handle num_eval constraint
-    if args.num_eval is not None:
-        eval_source = task.eval_dataset.select(range(min(len(task.eval_dataset), args.num_eval)))
-    else:
-        eval_source = task.eval_dataset
 
-    eval_dataset = process_vision_dataset(
-        args, 
-        eval_source, 
-        image_processor, 
-        is_training=False
-    )
+    def prepare_eval_split(dataset, split_name):
+        if dataset is None: return None
+        if args.num_eval is not None:
+            source = dataset.select(range(min(len(dataset), args.num_eval)))
+        else:
+            source = dataset
+        return process_vision_dataset(args, source, image_processor, is_training=False)
+
+    eval_dataset = {}
+    
+    if hasattr(task, 'val_dataset') and task.val_dataset is not None:
+        eval_dataset["validation"] = prepare_eval_split(task.val_dataset, "validation")
+        
+    if hasattr(task, 'test_dataset') and task.test_dataset is not None:
+        eval_dataset["test"] = prepare_eval_split(task.test_dataset, "test")
+
+    if not eval_dataset:
+        logger.warning("No explicit val/test split found, using default eval_dataset.")
+        eval_dataset = prepare_eval_split(task.eval_dataset, "eval")
 
     # 6. Initialize ZO Trainer
     # We use the DefaultDataCollator which handles stacking pixel_values tensors
@@ -195,6 +203,9 @@ def main():
             output_path = os.path.join(args.output_dir, fname)
             os.makedirs(os.path.dirname(output_path), exist_ok=True)
             write_metrics_to_file(metrics, output_path)
+
+            if "wandb" in args.report_to:
+                wandb.log(metrics)
 
     # Final Logging
     if args.report_to == "wandb" and args.local_rank <= 0:

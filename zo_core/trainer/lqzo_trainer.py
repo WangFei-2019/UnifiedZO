@@ -101,7 +101,7 @@ class LQZOTrainer(QZOTrainer):
                 
                 # Optimization: Use addmm where possible
                 # param = param + (scaling_factor * eps * scale / sqrt(r)) * (u @ v.t)
-                alpha = (scaling_factor * args.zo_eps * args.zo_scale) / (args.lozo_rank**0.5)
+                alpha = (scaling_factor * args.zo_eps * args.zoquantified_scale) / (args.lozo_rank**0.5)
                 
                 # Check shape compatibility for addmm
                 # Scales sometimes have shapes that match U@V.t perfectly, sometimes they need reshaping if channel_scale > 1
@@ -115,7 +115,7 @@ class LQZOTrainer(QZOTrainer):
             else:
                 # 1D Scales
                 z = torch.normal(mean=0, std=1, size=param.data.size(), device=param.data.device, dtype=param.data.dtype)
-                param.data += scaling_factor * z * args.zo_eps * args.zo_scale
+                param.data += scaling_factor * z * args.zo_eps * args.zoquantified_scale
 
     def _update_lqzo(self):
         args = self.args
@@ -163,23 +163,23 @@ class LQZOTrainer(QZOTrainer):
                 
                 # Optimization: Update param in-place using addmm
                 # param = param - lr * grad * scale * (u @ v.t) / sqrt(r)
-                alpha = -1.0 * lr * self.projected_grad * args.zo_scale / (args.lozo_rank**0.5)
+                alpha = -1.0 * lr * self.projected_grad * args.zoquantified_scale / (args.lozo_rank**0.5)
                 
                 if param.data.shape == (u.shape[0], v.shape[0]):
                     torch.addmm(param.data, u, v.t(), beta=1.0, alpha=alpha, out=param.data)
                 else:
                     # Fallback for reshapes
                     grad_est = self.projected_grad * (u @ v.t()).reshape(param.data.shape) / (args.lozo_rank**0.5)
-                    update = lr * grad_est * args.zo_scale
+                    update = lr * grad_est * args.zoquantified_scale
                     param.data -= update
             else:
                 z = torch.normal(mean=0, std=1, size=param.data.size(), device=param.data.device, dtype=param.data.dtype)
                 grad_est = self.projected_grad * z
-                update = lr * grad_est * args.zo_scale
+                update = lr * grad_est * args.zoquantified_scale
                 param.data -= update
             
             # Clamp ensures scales remain positive (important for quantization scales)
-            param.data.clamp_(min=1e-7 * args.zo_scale)
+            param.data.clamp_(min=1e-7 * args.zoquantified_scale)
 
     def _update_lqzo_momentum(self):
         # Basic momentum implementation for LQZO
@@ -218,8 +218,8 @@ class LQZOTrainer(QZOTrainer):
                  step += args.weight_decay * param.data
             
             if is_scale:
-                update = lr * step * args.zo_scale
-                param.data = torch.clamp(param.data - update, min=1e-7 * args.zo_scale)
+                update = lr * step * args.zoquantified_scale
+                param.data = torch.clamp(param.data - update, min=1e-7 * args.zoquantified_scale)
             else:
                 param.data -= lr * step
 

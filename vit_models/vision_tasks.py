@@ -44,9 +44,9 @@ class VisionDataset:
         # Construct potential local file paths based on the dataset name and the root directory.
         possible_paths = []
         if DATASET_DIR:
-            # Case A: Full relative path (e.g., .../datasets/uoft-cs/cifar-10)
+            # Case A: Full relative path (e.g., .../datasets/uoft-cs/cifar10)
             possible_paths.append(os.path.join(DATASET_DIR, self.dataset_name))
-            # Case B: Suffix only (e.g., .../datasets/cifar-10) - handles cases where user ignored the namespace.
+            # Case B: Suffix only (e.g., .../datasets/cifar10) - handles cases where user ignored the namespace.
             if "/" in self.dataset_name:
                 possible_paths.append(os.path.join(DATASET_DIR, self.dataset_name.split("/")[-1]))
 
@@ -113,14 +113,26 @@ class VisionDataset:
             self.train_dataset = raw_datasets["train"]
         else:
             raise ValueError(f"Critical Error: Dataset missing 'train' split. Available keys: {raw_datasets.keys()}")
-        
+
+        self.val_dataset = None
+        self.test_dataset = None
+
         # Standardize evaluation split naming (test vs. validation).
+        if "validation" in raw_datasets:
+            self.val_dataset = raw_datasets["validation"]
+        elif "train" in raw_datasets:
+            logger.info("No 'validation' split found. Splitting 10% from 'train' as validation set.")
+            split = self.train_dataset.train_test_split(test_size=0.1, seed=42)
+            self.train_dataset = split["train"]
+            self.val_dataset = split["test"]
+
         if "test" in raw_datasets:
-            self.eval_dataset = raw_datasets["test"]
-        elif "validation" in raw_datasets:
-            self.eval_dataset = raw_datasets["validation"]
-        else:
-            raise ValueError(f"Critical Error: Dataset must contain 'test' or 'validation' split. Available keys: {raw_datasets.keys()}")
+            self.test_dataset = raw_datasets["test"]
+
+        self.eval_dataset = self.test_dataset if self.test_dataset is not None else self.val_dataset
+
+        if self.eval_dataset is None:
+             raise ValueError(f"Dataset must have 'test' or 'validation' split.")
 
         # --- Metadata Extraction (Label Mapping) ---
         potential_label_keys = ["label", "labels", "fine_label", "coarse_label"]
@@ -135,41 +147,47 @@ class VisionDataset:
                 self.id2label = {i: label for i, label in enumerate(self.labels)}
                 self.label2id = {label: i for i, label in enumerate(self.labels)}
                 logger.info(f"Successfully extracted {self.num_labels} classes: {self.labels}")
-                
-                # Normalize column name to 'label' for downstream compatibility.
-                if label_key != "label":
-                    self.train_dataset = self.train_dataset.rename_column(label_key, "label")
-                    self.eval_dataset = self.eval_dataset.rename_column(label_key, "label")
+            
             else:
-                # Edge Case: Metadata is missing (common with Parquet/Arrow raw loads).
-                # Heuristic restoration for CIFAR-10 to prevent runtime failures.
                 name_clean = self.dataset_name.lower().replace("-", "").replace("/", "")
-                if "cifar10" in name_clean and self.num_labels == 0:
-                    logger.info("Metadata missing. Applying manual restoration for CIFAR-10 labels.")
+                if "cifar100" in name_clean and self.num_labels == 0:
+                    logger.info("Restoring missing CIFAR-100 label metadata (100 classes)...")
+                    self.num_labels = 100
+                    self.labels = [str(i) for i in range(100)] 
+                    self.id2label = {i: str(i) for i in range(100)}
+                    self.label2id = {str(i): i for i in range(100)}
+                elif "cifar10" in name_clean and self.num_labels == 0:
+                    logger.info("Restoring missing CIFAR-10 label metadata...")
                     self.labels = ['airplane', 'automobile', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck']
                     self.num_labels = 10
                     self.id2label = {i: label for i, label in enumerate(self.labels)}
                     self.label2id = {label: i for i, label in enumerate(self.labels)}
                 else:
-                    logger.warning("Label feature detected but lacks metadata (names). Manual mapping may be required.")
+                    logger.warning("Label feature exists but lacks metadata. Manual mapping might be needed.")
+
+            if label_key != "label":
+                logger.info(f"Renaming label column '{label_key}' to 'label'")
+                self.train_dataset = self.train_dataset.rename_column(label_key, "label")
+                if self.eval_dataset:
+                    self.eval_dataset = self.eval_dataset.rename_column(label_key, "label")
         else:
-             logger.warning(f"Label column not found. Available features: {self.train_dataset.features.keys()}")
+             logger.warning(f"Could not find label column. Features: {self.train_dataset.features.keys()}")
 
 class CIFAR10Dataset(VisionDataset):
     """
     Wrapper for the CIFAR-10 dataset.
-    Configured to match the directory structure: 'uoft-cs/cifar-10'.
+    Configured to match the directory structure: 'uoft-cs/cifar10'.
     """
     def __init__(self):
-        super().__init__(dataset_name="uoft-cs/cifar-10")
+        super().__init__(dataset_name="uoft-cs/cifar10")
 
 class CIFAR100Dataset(VisionDataset):
     """
     Wrapper for the CIFAR-100 dataset.
-    Configured to match the directory structure: 'uoft-cs/cifar-100'.
+    Configured to match the directory structure: 'uoft-cs/cifar100'.
     """
     def __init__(self):
-        super().__init__(dataset_name="uoft-cs/cifar-100")
+        super().__init__(dataset_name="uoft-cs/cifar100")
 
 class ImageNetDataset(VisionDataset):
     """
@@ -191,7 +209,7 @@ def get_vision_task(task_name: str) -> VisionDataset:
     task_map = {
         "cifar10": CIFAR10Dataset,
         "uoft-cs/cifar10": CIFAR10Dataset,
-        "uoft-cs/cifar-10": CIFAR10Dataset, # Support for hyphenated variations
+        "uoft-cs/cifar10": CIFAR10Dataset, # Support for hyphenated variations
         "cifar100": CIFAR100Dataset,
         "uoft-cs/cifar100": CIFAR100Dataset,
         "imagenet": ImageNetDataset,

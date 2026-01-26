@@ -9,13 +9,17 @@ MODEL_SHORT="${MODEL_SHORT[-1]}"
 TASK=${TASK:-uoft-cs/cifar10}
 MODE=${MODE:-ft} # ft (Full Tuning) or lora
 
+TRAIN=${TRAIN:-1000}
+DEV=${DEV:-500}
+EVAL=${EVAL:-1000}
+
 # Hyperparameters
 BS=${BS:-64}        # Batch Size
 LR=${LR:-1e-5}      # Learning Rate
 EPS=${EPS:-1e-3}    # ZO Epsilon
 SEED=${SEED:-0}
 STEPS=${STEPS:-20000}
-EVAL_STEPS=${EVAL_STEPS:-1000}
+EVAL_STEPS=${EVAL_STEPS:-2000}
 
 # --- PEFT / Mode Logic ---
 if [ "$MODE" == "lora" ]; then
@@ -41,8 +45,9 @@ python vit_models/run_vit.py \
     --tag $TAG \
     --trainer mezo \
     --train_as_classification True \
-    --num_train 1000 \
-    --num_eval 100 \
+    --num_train $TRAIN \
+    --num_dev $DEV \
+    --num_eval $EVAL \
     --learning_rate $LR \
     --zo_eps $EPS \
     --max_steps $STEPS \
@@ -57,5 +62,7 @@ python vit_models/run_vit.py \
     --save_total_limit 1 \
     --dataloader_num_workers 16 \
     --dataloader_pin_memory True \
+    --load_best_model_at_end True \
+    --metric_for_best_model eval_validation_loss \
     $PEFT_ARGS \
     "$@"

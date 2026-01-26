@@ -13,6 +13,10 @@ LOZO_RANK=${LOZO_RANK:-2}
 CHANNEL_SCALE=${CHANNEL_SCALE:-1}
 MOMENTUM=${MOMENTUM:-True}
 
+TRAIN=${TRAIN:-1000}
+DEV=${DEV:-500}
+EVAL=${EVAL:-1000}
+
 # Hyperparameters
 BS=${BS:-64}        # Batch Size
 LR=${LR:-1e-5}
@@ -49,8 +53,9 @@ python vit_models/run_vit.py \
     --tag $TAG \
     --trainer lqzo \
     --train_as_classification True \
-    --num_train 1000 \
-    --num_eval 100 \
+    --num_train $TRAIN \
+    --num_dev $DEV \
+    --num_eval $EVAL \
     --learning_rate $LR \
     --zo_eps $EPS \
     --max_steps $STEPS \
@@ -65,6 +70,8 @@ python vit_models/run_vit.py \
     --save_total_limit 1 \
     --dataloader_num_workers 16 \
     --dataloader_pin_memory True \
+    --load_best_model_at_end True \
+    --metric_for_best_model eval_validation_loss \
     $PEFT_ARGS \
     $EXTRA_ZO_ARGS \
     "$@"

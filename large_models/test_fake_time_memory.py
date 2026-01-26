@@ -2,6 +2,13 @@
 # Benchmark using Refactored Trainer Classes directly with PEFT support
 # Includes detailed Time Profiling (Perturb/Forward/Update) and Memory Statistics
 
+import os
+import sys
+
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)
+sys.path.append(parent_dir)
+
 import torch
 import time
 import numpy as np
@@ -861,14 +868,15 @@ def main_test(
         use_cpu=False,
         zo_eps=1e-3,
         learning_rate=1e-6,
-        # Method specifics
-        zo_adamu_beta1=0.9, zo_adamu_beta2=0.999,
-        lozo_rank=8, lozo_step_interval=100,
-        hessian_smooth="constant1e-4", 
-        sliding_window_length=14, momentum_fb_max=1.0,
-        fzoo_n=4, adalezo_k_ratio=0.1,
-        # QZO/LQZO Specifics
-        quant_method="gptq", zo_scale=1.0, clip_zo_grad=True,
+        # # Method specifics
+        # zo_adamu_beta1=0.9, zo_adamu_beta2=0.999,
+        # lozo_rank=8, lozo_step_interval=100,
+        # hessian_smooth="constant1e-4", 
+        # sliding_window_length=14, momentum_fb_max=1.0,
+        # fzoo_n=4, adalezo_k_ratio=0.1,
+        # # QZO/LQZO Specifics
+        quant_method="gptq", zoquantified_scale=1.0, 
+        clip_zo_grad=True,
     )
 
     if peft_mode == "lora":
@@ -886,7 +894,8 @@ def main_test(
         # Note: QZO won't work on dummy non-quantized model, but we keep fallback for generic testing
         config = AutoConfig.from_pretrained("facebook/opt-1.3b")
         model = AutoModelForCausalLM.from_config(config)
-        if load_float16: model = model.half()
+        if load_float16: 
+            model = model.half()
         model = model.cuda()
 
     model.eval()
@@ -1049,4 +1058,4 @@ def main_test(
 if __name__ == "__main__":
     Fire(main_test)
     # Example usage:
-    # CUDA_VISIBLE_DEVICES=0 python test_fake_time_memory.py 16 256 mezo none 20 True /workspace/wangfei154/models/facebook/opt-13b
+    # CUDA_VISIBLE_DEVICES=0 python large_models/test_fake_time_memory.py 16 256 mezo none 20 True /workspace/wangfei154/models/facebook/opt-13b
