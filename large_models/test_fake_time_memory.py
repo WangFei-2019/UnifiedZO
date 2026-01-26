@@ -19,7 +19,7 @@ from torch.utils.data import Dataset
 from peft import get_peft_model, LoraConfig, TaskType
 
 # Import modules from the refactored code (ZO_all_code)
-from arguments import ZOTrainingArguments
+from arguments import LMZOTrainingArguments
 from zo_core.trainer import get_trainer_class
 
 # =============================================================================
@@ -861,7 +861,7 @@ def main_test(
     print(f"Steps:      {steps}")
 
     # 1. Args Setup
-    args = ZOTrainingArguments(
+    args = LMZOTrainingArguments(
         output_dir="./tmp_bench",
         per_device_train_batch_size=batch_size,
         trainer=method,

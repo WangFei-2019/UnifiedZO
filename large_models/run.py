@@ -29,7 +29,7 @@ from peft import get_peft_model, LoraConfig, PrefixTuningConfig, TaskType, Promp
 
 # --- Local Imports ---
 # Ensure these files are in the same directory or properly installed in PYTHONPATH
-from arguments import ZOTrainingArguments
+from arguments import LMZOTrainingArguments
 from tasks import get_task
 from zo_core.trainer import get_trainer_class, BaseZOTrainer
 from utils import (
@@ -54,7 +54,7 @@ logger = logging.getLogger(__name__)
 
 def main():
     # 1. Parse Arguments
-    parser = HfArgumentParser((ZOTrainingArguments,))
+    parser = HfArgumentParser((LMZOTrainingArguments,))
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
         # If we pass only one argument to the script and it's the path to a json file,
         # let's parse it to get our arguments.

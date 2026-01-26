@@ -17,7 +17,7 @@
 
 # # 引入本地模块
 # sys.path.append(os.getcwd())
-# from arguments import ZOTrainingArguments
+# from arguments import LMZOTrainingArguments
 # from tasks import get_task
 # from utils import process_dataset
 # from zo_core.trainer.mezo_trainer import MeZOTrainer
@@ -73,7 +73,7 @@
 
 # def main():
 #     # --- 1. Setup & Args ---
-#     parser = HfArgumentParser((ZOTrainingArguments,))
+#     parser = HfArgumentParser((LMZOTrainingArguments,))
 #     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
 #         args = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))[0]
 #     else:
@@ -329,7 +329,7 @@ from transformers import (
 )
 
 sys.path.append(os.getcwd())
-from arguments import ZOTrainingArguments
+from arguments import LMZOTrainingArguments
 from tasks import get_task
 from utils import process_dataset
 from zo_core.trainer.mezo_trainer import MeZOTrainer
@@ -369,7 +369,7 @@ def get_layer_id(name):
     return 9999 
 
 def main():
-    parser = HfArgumentParser((ZOTrainingArguments,))
+    parser = HfArgumentParser((LMZOTrainingArguments,))
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
         args = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))[0]
     else:

@@ -18,10 +18,11 @@ from transformers import (
     HfArgumentParser, 
     DefaultDataCollator,
     set_seed,
-    EvalPrediction
+    EvalPrediction,
+    BitsAndBytesConfig
 )
 
-from zo_core.arguments import ZOTrainingArguments
+from arguments import ViTZOTrainingArguments
 from zo_core.trainer import get_trainer_class
 from zo_core.utils import result_file_tag, write_metrics_to_file
 
@@ -29,6 +30,7 @@ from zo_core.utils import result_file_tag, write_metrics_to_file
 # Importing vision-specific tasks and data processing utilities
 from vision_tasks import get_vision_task
 from data_utils import process_vision_dataset
+from sim_quant import replace_with_simulated_quant
 
 # Setup logging configuration
 logging.basicConfig(
@@ -58,7 +60,7 @@ def main():
     
     # 1. Argument Parsing
     # We reuse the ZOTrainingArguments from the core module as ZO parameters are universal.
-    parser = HfArgumentParser((ZOTrainingArguments,))
+    parser = HfArgumentParser((ViTZOTrainingArguments,))
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
         args = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))[0]
     else:
@@ -99,6 +101,22 @@ def main():
         ignore_mismatched_sizes=True # Allow resizing head for fine-tuning on new datasets
     )
 
+    if args.trainer in ["qzo", "lqzo"]:
+        from sim_quant import replace_with_simulated_quant
+        replace_with_simulated_quant(model,
+                                     bits=args.quantized_bit, 
+                                     group_size=args.quant_group_size
+                                     )
+        
+        # 3. Freeze everything EXCEPT Scales
+        for name, param in model.named_parameters():
+            if "scales" in name:
+                param.requires_grad = True # LQZO Target
+            elif "bias" in name:
+                param.requires_grad = True # Optional
+            else:
+                param.requires_grad = False # Freeze Weights
+
     # 4. Inject Parameter Efficient Fine-Tuning (PEFT) - Optional
     # Logic for LoRA/Prefix Tuning can be added here similar to the NLP run.py.
     # For initial migration, we focus on full-parameter or standard ZO optimization.
@@ -118,17 +136,18 @@ def main():
         model.print_trainable_parameters()
 
     # 5. Data Processing
-    # Convert raw Hugging Face datasets into PyTorch Datasets with pixel_values
+    data_seed = args.train_set_seed if args.train_set_seed is not None else 42
     if args.num_train > 0:
-        # Subset sampling logic can be added here if needed
-        train_source = task.train_dataset.select(range(min(len(task.train_dataset), args.num_train)))
+        logger.info(f"Subsampling training set with seed {data_seed}...")
+        shuffled_train = task.train_dataset.shuffle(seed=data_seed)
+        train_dataset = shuffled_train.select(range(min(len(task.train_dataset), args.num_train)))
     else:
-        train_source = task.train_dataset
+        train_dataset = task.train_dataset
 
     logger.info("Processing Training Dataset...")
     train_dataset = process_vision_dataset(
         args, 
-        train_source, 
+        train_dataset, 
         image_processor, 
         is_training=True
     )
@@ -137,8 +156,11 @@ def main():
 
     def prepare_eval_split(dataset, split_name):
         if dataset is None: return None
-        if args.num_eval is not None:
+        if args.num_eval is not None and args.num_eval > 0:
+            logger.info(f"Subsampling eval set '{split_name}' to {args.num_eval} samples with FIXED seed 42...")
             source = dataset.select(range(min(len(dataset), args.num_eval)))
+            shuffled_eval = dataset.shuffle(seed=42)
+            source = shuffled_eval.select(range(min(len(dataset), args.num_eval)))
         else:
             source = dataset
         return process_vision_dataset(args, source, image_processor, is_training=False)
@@ -212,4 +234,17 @@ def main():
         wandb.finish()
 
 if __name__ == "__main__":
+    # # --------------------------------------
+    # import debugpy
+
+    # # 启动调试服务器，监听本地主机的5678端口
+    # debugpy.listen(('localhost', 15678))
+    # print("Waiting for debugger attach...")
+
+    # # 可选：暂停程序，直到调试器附加
+    # debugpy.wait_for_client()
+
+    # # 继续你的代码
+    # print("Debugger attached, continuing execution")
+    # # ---------------------------------------
     main()

@@ -45,8 +45,11 @@ class QZOTrainer(BaseZOTrainer):
         if self.args.momentum:
             self._init_momentum_buffers()
 
-        self.args.zoquantified_scale = 2 ** (4 - self.model.config.quantization_config.bits)
-
+        if hasattr(self.model.config, "quantization_config"):
+            self.args.zoquantified_scale = 2 ** (4 - self.model.config.quantization_config.bits)
+        else:
+            self.args.zoquantified_scale = 2 ** (4 - self.args.quantized_bit) 
+        
     def _identify_quantized_params(self):
         """
         Identify which parameters are quantization scales and which are regular float16 params.
@@ -74,6 +77,17 @@ class QZOTrainer(BaseZOTrainer):
                         # Note: codebooks might be added here if supported
             except ImportError:
                 logger.warning("AQLM modules not found. Ensure aqlm is installed.")
+        
+        else:
+            found_sim_quant = False
+            for name, module in self.model.named_modules():
+                if module.__class__.__name__ == "SimulatedQuantLinear":
+                    if hasattr(module, "scales") and isinstance(module.scales, torch.nn.Parameter):
+                        self.fp16_to_optimize['scales'].append((name, module.scales))
+                        found_sim_quant = True
+            
+            if found_sim_quant:
+                logger.info(f"Successfully identified {len(self.fp16_to_optimize['scales'])} Simulated Quantized layers.")
         
         # Identify regular parameters (bias, norm, etc.)
         for name, param in self.model.named_parameters():

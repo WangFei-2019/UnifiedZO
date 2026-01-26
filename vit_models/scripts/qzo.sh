@@ -62,7 +62,7 @@ python vit_models/run_vit.py \
     --logging_steps 10 \
     --save_steps $EVAL_STEPS \
     --eval_steps $EVAL_STEPS \
-    --evaluation_strategy steps \
+    --eval_strategy steps \
     --per_device_train_batch_size $BS \
     --per_device_eval_batch_size 64 \
     --seed $SEED \

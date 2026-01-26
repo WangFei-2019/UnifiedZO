@@ -11,11 +11,11 @@ MODE=${MODE:-ft}
 # LQZO Specific Defaults
 LOZO_RANK=${LOZO_RANK:-2}
 CHANNEL_SCALE=${CHANNEL_SCALE:-1}
-MOMENTUM=${MOMENTUM:-True}
+MOMENTUM=${MOMENTUM:-False}
 
 TRAIN=${TRAIN:-1000}
 DEV=${DEV:-500}
-EVAL=${EVAL:-1000}
+EVAL=${EVAL:-100}
 
 # Hyperparameters
 BS=${BS:-64}        # Batch Size
@@ -23,7 +23,7 @@ LR=${LR:-1e-5}
 EPS=${EPS:-1e-3}
 SEED=${SEED:-0}
 STEPS=${STEPS:-20000}
-EVAL_STEPS=${EVAL_STEPS:-100}
+EVAL_STEPS=${EVAL_STEPS:-2000}
 
 # --- PEFT Logic ---
 if [ "$MODE" == "lora" ]; then
@@ -62,7 +62,7 @@ python vit_models/run_vit.py \
     --logging_steps 10 \
     --save_steps $EVAL_STEPS \
     --eval_steps $EVAL_STEPS \
-    --evaluation_strategy steps \
+    --eval_strategy steps \
     --per_device_train_batch_size $BS \
     --per_device_eval_batch_size 64 \
     --seed $SEED \

@@ -141,10 +141,10 @@ class ZOTrainingArguments(TrainingArguments):
 
     # --- Quantized ZO Specific Arguments ---
     # --- QZO / LQZO Specific Arguments ---
-    quant_method: str = field(default="none", metadata={"help": "Quantization method: 'gptq', 'aqlm', or 'none'."})
+    quant_method: str = field(default="gptq", metadata={"help": "Quantization method: 'gptq', 'aqlm', or 'none'."})
     train_unquantized: bool = field(default=False, metadata={"help": "Whether to train unquantized parameters (e.g. norms, bias) in QZO/LQZO."})
-    zoquantified_scale: float = field(default=1.0, metadata={"help": "Learning rate scaler for quantization scales."}) 
-    channel_scale: int = field(default=1, metadata={"help": "Channel scale factor for LQZO reshaping."})
+    zoquantified_scale: float = field(default=1.0, metadata={"help": "Learning rate scaler for quantization scales."})
+    channel_scale: int = field(default=8, metadata={"help": "Channel scale factor for LQZO reshaping."})
     clip_zo_grad: bool = field(default=False, metadata={"help": "Whether to clip the projected gradient."})
     
     # QZO/LQZO Momentum

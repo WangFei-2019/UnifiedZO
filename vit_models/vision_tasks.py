@@ -149,6 +149,7 @@ class VisionDataset:
                 logger.info(f"Successfully extracted {self.num_labels} classes: {self.labels}")
             
             else:
+                # Manual metadata restoration for CIFAR
                 name_clean = self.dataset_name.lower().replace("-", "").replace("/", "")
                 if "cifar100" in name_clean and self.num_labels == 0:
                     logger.info("Restoring missing CIFAR-100 label metadata (100 classes)...")
@@ -166,10 +167,25 @@ class VisionDataset:
                     logger.warning("Label feature exists but lacks metadata. Manual mapping might be needed.")
 
             if label_key != "label":
-                logger.info(f"Renaming label column '{label_key}' to 'label'")
+                logger.info(f"Renaming label column '{label_key}' to 'label' across all splits.")
+                
+                # 1. Rename Train
                 self.train_dataset = self.train_dataset.rename_column(label_key, "label")
-                if self.eval_dataset:
-                    self.eval_dataset = self.eval_dataset.rename_column(label_key, "label")
+                
+                # 2. Rename Val (if exists)
+                if self.val_dataset is not None:
+                     # Check if column exists first to avoid double renaming errors
+                    if label_key in self.val_dataset.features:
+                        self.val_dataset = self.val_dataset.rename_column(label_key, "label")
+                
+                # 3. Rename Test (if exists)
+                if self.test_dataset is not None:
+                    if label_key in self.test_dataset.features:
+                        self.test_dataset = self.test_dataset.rename_column(label_key, "label")
+
+                # 4. Re-assign eval_dataset to point to the updated objects
+                self.eval_dataset = self.test_dataset if self.test_dataset is not None else self.val_dataset
+
         else:
              logger.warning(f"Could not find label column. Features: {self.train_dataset.features.keys()}")
 
