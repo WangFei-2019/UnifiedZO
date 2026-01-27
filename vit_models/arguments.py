@@ -10,7 +10,7 @@ class ViTZOTrainingArguments(ZOTrainingArguments):
     quant_method: str = field(default="none", metadata={"help": "Quantization method: 'gptq', 'aqlm', or 'none'."})
 
     quantized_bit: int = field(
-        default=4,
+        default=-1,
         metadata={"help": "Target bit-width for quantization (e.g., 2, 4, 8). Default is 4."}
     )
     quant_group_size: int = field(

@@ -875,7 +875,7 @@ def main_test(
         # sliding_window_length=14, momentum_fb_max=1.0,
         # fzoo_n=4, adalezo_k_ratio=0.1,
         # # QZO/LQZO Specifics
-        quant_method="gptq", zoquantified_scale=1.0, 
+        quant_method="gptq",
         clip_zo_grad=True,
     )
 

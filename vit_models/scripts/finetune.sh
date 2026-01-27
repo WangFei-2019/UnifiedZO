@@ -8,18 +8,14 @@ MODEL_SHORT="${MODEL_SHORT[-1]}"
 TASK=${TASK:-uoft-cs/cifar10}
 MODE=${MODE:-ft} # ft (Full Fine-Tuning) or lora
 
-TRAIN=${TRAIN:-1000}
-DEV=${DEV:-500}
-EVAL=${EVAL:-1000}
-
 # Hyperparameters (Standard FT usually uses smaller LR)
 BS=${BS:-64}
 LR=${LR:-1e-4}      # Standard Fine-tuning LR
 SEED=${SEED:-0}
 EPOCH=${EPOCH:-5}
-TRAIN=${TRAIN:-1000}
-DEV=${DEV:-500}
-EVAL=${EVAL:-1000}
+TRAIN=${TRAIN:--1}
+DEV=${DEV:-1000}
+EVAL=${EVAL:--1}
 
 # --- PEFT Logic ---
 if [ "$MODE" == "lora" ]; then

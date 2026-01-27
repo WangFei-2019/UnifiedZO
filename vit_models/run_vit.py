@@ -101,7 +101,7 @@ def main():
         ignore_mismatched_sizes=True # Allow resizing head for fine-tuning on new datasets
     )
 
-    if args.trainer in ["qzo", "lqzo"]:
+    if args.trainer in ["qzo", "lqzo"] or args.quantized_bit > 0:
         from sim_quant import replace_with_simulated_quant
         replace_with_simulated_quant(model,
                                      bits=args.quantized_bit, 
@@ -114,6 +114,8 @@ def main():
                 param.requires_grad = True # LQZO Target
             elif "bias" in name:
                 param.requires_grad = True # Optional
+            elif "classifier" in name or "head" in name:
+                param.requires_grad = True
             else:
                 param.requires_grad = False # Freeze Weights
 
@@ -154,24 +156,23 @@ def main():
     
     logger.info("Processing Evaluation Dataset...")
 
-    def prepare_eval_split(dataset, split_name):
-        if dataset is None: return None
-        if args.num_eval is not None and args.num_eval > 0:
-            logger.info(f"Subsampling eval set '{split_name}' to {args.num_eval} samples with FIXED seed 42...")
-            source = dataset.select(range(min(len(dataset), args.num_eval)))
-            shuffled_eval = dataset.shuffle(seed=42)
-            source = shuffled_eval.select(range(min(len(dataset), args.num_eval)))
+    def prepare_eval_split(dataset, split_name, limit_count=None):
+        if dataset is None: 
+            return None
+        if limit_count is not None and limit_count > 0:
+            logger.info(f"Subsampling {split_name} set to {limit_count} samples...")
+            shuffled = dataset.shuffle(seed=42)
+            return process_vision_dataset(args, shuffled.select(range(min(len(dataset), limit_count))), image_processor, is_training=False)
         else:
-            source = dataset
-        return process_vision_dataset(args, source, image_processor, is_training=False)
+            return process_vision_dataset(args, dataset, image_processor, is_training=False)
 
     eval_dataset = {}
     
     if hasattr(task, 'val_dataset') and task.val_dataset is not None:
-        eval_dataset["validation"] = prepare_eval_split(task.val_dataset, "validation")
-        
+        eval_dataset["validation"] = prepare_eval_split(task.val_dataset, "validation", limit_count=args.num_dev)
+
     if hasattr(task, 'test_dataset') and task.test_dataset is not None:
-        eval_dataset["test"] = prepare_eval_split(task.test_dataset, "test")
+        eval_dataset["test"] = prepare_eval_split(task.test_dataset, "test", limit_count=args.num_eval)
 
     if not eval_dataset:
         logger.warning("No explicit val/test split found, using default eval_dataset.")

@@ -85,11 +85,18 @@ class SimulatedQuantLinear(nn.Module):
         
         return F.linear(input, eff_weight, self.bias)
 
-def replace_with_simulated_quant(model, bits=4, group_size=128):
+def replace_with_simulated_quant(model, bits=4, group_size=128, exclude_names=None):
     """
-    Recursively replace nn.Linear with SimulatedQuantLinear
+    Recursively replace nn.Linear with SimulatedQuantLinear, skipping excluded modules.
     """
+    if exclude_names is None:
+        exclude_names = ["classifier", "head"]
+
     for name, module in model.named_children():
+        if name in exclude_names:
+            print(f"Skipping excluded module (Keep FP16): {name}")
+            continue
+
         if isinstance(module, nn.Linear):
             # Check feasibility (channel must be divisible by group_size)
             if module.in_features % group_size == 0:
@@ -105,5 +112,5 @@ def replace_with_simulated_quant(model, bits=4, group_size=128):
             else:
                 print(f"Skipping {name}: in_features {module.in_features} not divisible by {group_size}")
         else:
-            replace_with_simulated_quant(module, bits, group_size)
+            replace_with_simulated_quant(module, bits, group_size, exclude_names)
     return model

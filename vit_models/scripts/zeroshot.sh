@@ -8,9 +8,12 @@ MODEL_SHORT="${MODEL_SHORT[-1]}"
 TASK=${TASK:-uoft-cs/cifar10}
 
 # Hyperparameters
-BS=${BS:-32}        # Eval Batch Size
+BS=${BS:-64}        # Eval Batch Size
 SEED=${SEED:-42}
-NUM_EVAL=${NUM_EVAL:-1000} # Number of samples to evaluate
+DEV=${DEV:-1000}
+EVAL=${EVAL:--1} # Number of samples to evaluate
+
+BIT=${BIT:--1} 
 
 # Generate Experiment Tag
 TAG=zeroshot-${TASK}-${MODEL_SHORT}
@@ -29,10 +32,12 @@ python vit_models/run_vit.py \
     --trainer none \
     --train_as_classification True \
     --num_train 0 \
-    --num_eval $NUM_EVAL \
+    --num_eval $EVAL \
+    --num_dev $DEV \
     --per_device_eval_batch_size $BS \
     --seed $SEED \
     --report_to wandb \
     --dataloader_num_workers 4 \
     --dataloader_pin_memory True \
+    --quantized_bit $BIT \
     "$@"
