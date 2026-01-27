@@ -91,6 +91,8 @@ class QZOTrainer(BaseZOTrainer):
         
         # Identify regular parameters (bias, norm, etc.)
         for name, param in self.model.named_parameters():
+            if "scales" in name:
+                continue
             if param.requires_grad:
                 self.fp16_to_optimize['regular'].append((name, param))
 

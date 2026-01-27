@@ -11,7 +11,7 @@ class LQZOTrainer(QZOTrainer):
 
     def __init__(self, model, args, **kwargs):
         super().__init__(model, args, **kwargs)
-        self.step_counter = 0
+        self.step_counter = -1
         self.v_matrices = {} # Store V matrices for low-rank layers
 
     def training_step(self, model, inputs, num_items_in_batch=None):
@@ -51,7 +51,6 @@ class LQZOTrainer(QZOTrainer):
 
     def _perturb_lqzo(self, scaling_factor):
         args = self.args
-        step = self.step_counter
         torch.manual_seed(self.zo_random_seed)
 
         # 1. Regular Params
@@ -59,7 +58,7 @@ class LQZOTrainer(QZOTrainer):
             for name, param in self.fp16_to_optimize['regular']:
                 if param.data.ndim >= 2:
                     # Low-rank perturbation for 2D params
-                    if (step - 1) % args.lozo_step_interval == 0:
+                    if self.step_counter % args.lozo_step_interval == 0:
                         v = self.random_bernoulli_matrix(m=param.data.size(1), n=args.lozo_rank, device=param.data.device, dtype=param.data.dtype)
                         self.v_matrices[name] = v
                     else:
@@ -83,7 +82,7 @@ class LQZOTrainer(QZOTrainer):
         # 2. Scales
         for name, param in self.fp16_to_optimize['scales']:
             if param.data.ndim >= 2:
-                if (step - 1) % args.lozo_step_interval == 0:
+                if self.step_counter % args.lozo_step_interval == 0:
                     # Handle LQZO Momentum special case for V initialization
                     if args.momentum_lqzo and name in self.fp16_to_optimize_momentum['scales'] and not isinstance(self.fp16_to_optimize_momentum['scales'][name], int):
                         v = self.random_bernoulli_matrix(m=param.data.size(1) // args.channel_scale, n=args.lozo_rank, device=param.data.device, dtype=param.data.dtype)

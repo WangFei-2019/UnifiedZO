@@ -12,7 +12,7 @@ MODE=${MODE:-ft}
 QUANT_METHOD=${QUANT_METHOD:-none} # Options: none (simulated), gptq, aqlm
 CLIP_GRAD=${CLIP_GRAD:-True}       # Whether to clip ZO gradients
 
-TRAIN=${TRAIN:-1}
+TRAIN=${TRAIN:--1}
 DEV=${DEV:-1000}
 EVAL=${EVAL:--1}
 
@@ -40,7 +40,7 @@ if [ "$CLIP_GRAD" = "True" ]; then
 fi
 
 # Generate Experiment Tag
-TAG=qzo-${MODE}-${QUANT_METHOD}-${TASK}-lr${LR}-eps${EPS}-bit${BIT}-seed${SEED}-new
+TAG=qzo-${MODE}-${QUANT_METHOD}-${TASK}-lr${LR}-eps${EPS}-bit${BIT}-seed${SEED}
 OUTPUT_DIR="result/vit_qzo/${TAG}"
 
 echo "Running ViT QZO | Task: $TASK | Mode: $MODE | Quant: $QUANT_METHOD"
@@ -73,6 +73,7 @@ python vit_models/run_vit.py \
     --load_best_model_at_end True \
     --metric_for_best_model eval_validation_loss \
     --quantized_bit ${BIT} \
+    --clip_zo_grad \
     $PEFT_ARGS \
     $EXTRA_ZO_ARGS \
     "$@"

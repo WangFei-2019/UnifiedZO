@@ -6,7 +6,8 @@ class SimulatedQuantLinear(nn.Module):
     """
     Simulates a GPTQ-style Quantized Linear Layer.
     - Weights are quantized group-wise and FROZEN.
-    - Scales are Group-wise Matrices (Out, In//Group) and TRAINABLE.
+    - Scales are Group-wise Matrices (In//Group, Out) and TRAINABLE. 
+      (Modified to match GPTQ layout: [Num_Groups, Out_Features])
     """
     def __init__(self, in_features, out_features, bias=True, bits=4, group_size=128):
         super().__init__()
@@ -20,7 +21,7 @@ class SimulatedQuantLinear(nn.Module):
         
         self.num_groups = in_features // group_size
 
-        self.scales = nn.Parameter(torch.ones(out_features, self.num_groups, dtype=torch.float16))
+        self.scales = nn.Parameter(torch.ones(self.num_groups, out_features, dtype=torch.float16))
 
         self.register_buffer('qweight_sim', torch.randn(out_features, in_features, dtype=torch.float16))
 
@@ -33,32 +34,28 @@ class SimulatedQuantLinear(nn.Module):
     @torch.no_grad()
     def import_from_linear(self, linear_layer):
         """
-        Initialize from a standard nn.Linear layer using Group-wise MinMax Quantization.
-        This approximates GPTQ's scale structure.
+        Initialize from a standard nn.Linear layer.
         """
         weight = linear_layer.weight.data.to(dtype=torch.float16)
         
-        # Reshape to (Out, Num_Groups, Group_Size) to compute scale per group
-        # [Out, In] -> [Out, Num_Groups, Group_Size]
+        # Reshape to [Out, Num_Groups, Group_Size]
         w_reshaped = weight.reshape(self.out_features, self.num_groups, self.group_size)
 
         # Calculate Scale per group
-        # Scale = max(abs(w_group)) / (2^(bits-1) - 1)
-        # Shape: [Out, Num_Groups, 1] -> squeeze to [Out, Num_Groups]
+        # Shape: [Out, Num_Groups]
         max_val = torch.abs(w_reshaped).max(dim=2)[0]
         max_q = 2**(self.bits - 1) - 1
         scale = max_val / max_q
-        scale = torch.clamp(scale, min=1e-5) # Avoid zero
+        scale = torch.clamp(scale, min=1e-5) 
 
         # Quantize Weight
-        # w_int = round(w / scale)
         scale_expanded = scale.unsqueeze(-1)
         w_int = torch.round(w_reshaped / scale_expanded)
         w_int = torch.clamp(w_int, -max_q, max_q)
         
-        # Store back
-        self.scales.data.copy_(scale)
-        self.qweight_sim.data.copy_(w_int.reshape(self.out_features, self.in_features)) # Store as flat but discrete
+        self.scales.data.copy_(scale.t())
+        
+        self.qweight_sim.data.copy_(w_int.reshape(self.out_features, self.in_features))
         
         if linear_layer.bias is not None:
             self.bias.data.copy_(linear_layer.bias.data)
@@ -68,13 +65,13 @@ class SimulatedQuantLinear(nn.Module):
     def forward(self, input):
         # W_eff = W_int * Scale
         
-        # 1. Reshape weights to match groups: [Out, Groups, GroupSize]
+        # 1. Reshape weights: [Out, Groups, GroupSize]
         w_reshaped = self.qweight_sim.reshape(self.out_features, self.num_groups, self.group_size)
         
-        # 2. Reshape scales for broadcasting: [Out, Groups, 1]
-        s_reshaped = self.scales.unsqueeze(-1)
+        # self.scales [Groups, Out] -> .t() -> [Out, Groups] -> .unsqueeze(-1) -> [Out, Groups, 1]
+        s_reshaped = self.scales.t().unsqueeze(-1)
         
-        # 3. Apply scales (Broadcasting happens here)
+        # 3. Apply scales (Broadcasting: [Out, Groups, GroupSize] * [Out, Groups, 1])
         eff_weight_grouped = w_reshaped * s_reshaped
         
         # 4. Flatten back to [Out, In]
