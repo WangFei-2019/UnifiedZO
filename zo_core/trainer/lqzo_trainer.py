@@ -56,7 +56,7 @@ class LQZOTrainer(QZOTrainer):
         # 1. Regular Params
         if args.train_unquantized:
             for name, param in self.fp16_to_optimize['regular']:
-                if param.data.ndim >= 2:
+                if param.data.ndim >= 2 and False:
                     # Low-rank perturbation for 2D params
                     if self.step_counter % args.lozo_step_interval == 0:
                         v = self.random_bernoulli_matrix(m=param.data.size(1), n=args.lozo_rank, device=param.data.device, dtype=param.data.dtype)
@@ -127,7 +127,7 @@ class LQZOTrainer(QZOTrainer):
         # 1. Regular
         if args.train_unquantized:
             for name, param in self.fp16_to_optimize['regular']:
-                if param.data.ndim >= 2:
+                if param.data.ndim >= 2 and False:
                     if self.step_counter % args.lozo_step_interval == 0:
                         v = self.random_bernoulli_matrix(m=param.data.size(1), n=args.lozo_rank, device=param.data.device, dtype=param.data.dtype)
                     else:

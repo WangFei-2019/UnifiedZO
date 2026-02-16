@@ -212,6 +212,16 @@ class ImageNetDataset(VisionDataset):
     def __init__(self):
         super().__init__(dataset_name="imagenet-1k")
 
+
+class OxfordIiitPetDataset(VisionDataset):
+    def __init__(self):
+        super().__init__(dataset_name="timm/oxford-iiit-pet")
+
+
+class Flowers102CategoriesDataset(VisionDataset):
+    def __init__(self):
+        super().__init__(dataset_name="huggan/flowers-102-categories")
+
 def get_vision_task(task_name: str) -> VisionDataset:
     """
     Factory function to instantiate the appropriate VisionDataset subclass.
@@ -230,6 +240,8 @@ def get_vision_task(task_name: str) -> VisionDataset:
         "uoft-cs/cifar100": CIFAR100Dataset,
         "imagenet": ImageNetDataset,
         "imagenet-1k": ImageNetDataset,
+        "oxford-iiit-pet": OxfordIiitPetDataset,
+        "flowers-102-categories": Flowers102CategoriesDataset
     }
     
     normalized_name = task_name.lower().strip()

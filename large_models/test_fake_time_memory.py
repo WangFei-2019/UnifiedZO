@@ -886,17 +886,8 @@ def main_test(
         args.prefix_init_by_real_act = False; args.reparam = False
 
     # 2. Load Model
-    try:
-        print(f"Loading model: {model_path}...")
-        model = AutoModelForCausalLM.from_pretrained(model_path, device_map="auto", torch_dtype=torch.float16 if load_float16 else torch.float32)
-    except Exception as e:
-        print(f"Warning: Could not load {model_path}. Creating Dummy OPT-1.3B. Error: {e}")
-        # Note: QZO won't work on dummy non-quantized model, but we keep fallback for generic testing
-        config = AutoConfig.from_pretrained("facebook/opt-1.3b")
-        model = AutoModelForCausalLM.from_config(config)
-        if load_float16: 
-            model = model.half()
-        model = model.cuda()
+    print(f"Loading model: {model_path}...")
+    model = AutoModelForCausalLM.from_pretrained(model_path, device_map="auto", torch_dtype=torch.float16 if load_float16 else torch.float32)
 
     model.eval()
 
