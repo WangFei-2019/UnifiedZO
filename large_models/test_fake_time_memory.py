@@ -987,7 +987,7 @@ def main_test(
     print(f"Static Memory: {static_mem_gb:.4f} GB")
 
     # Accumulators
-    stats_acc = {"perturb": [], "forward": [], "update": [], "peak_mem": [], "overhead": []}
+    stats_acc = {"perturb": [], "forward": [], "update": [], "peak_mem": [], "overhead": [], "samples_per_sec": [], "tokens_per_sec": []}
 
     print(f"\n{'-'*105}")
     print(f"{'Step':<5} | {'Loss':<10} | {'Perturb(s)':<12} | {'Forward(s)':<12} | {'Update(s)':<12} | {'Peak(GB)':<10} | {'Overhead(MB)':<12}")
@@ -1021,6 +1021,11 @@ def main_test(
         peak_gb = peak_bytes / 1024**3
         overhead_mb = (peak_gb - static_mem_gb) * 1024
 
+        # Calculate Throughput
+        total_step_time = current_stats['perturb'] + current_stats['forward'] + current_stats['update']
+        samples_per_sec = batch_size / total_step_time if total_step_time > 0 else 0
+        tokens_per_sec = (batch_size * sequence_length) / total_step_time if total_step_time > 0 else 0
+
         # Print Row
         loss_val = loss.item() if isinstance(loss, torch.Tensor) else loss
         print(f"{i+1:<5} | {loss_val:<10.4f} | {current_stats['perturb']:<12.5f} | {current_stats['forward']:<12.5f} | {current_stats['update']:<12.5f} | {peak_gb:<10.4f} | {overhead_mb:<12.2f}")
@@ -1031,19 +1036,41 @@ def main_test(
         stats_acc["update"].append(current_stats['update'])
         stats_acc["peak_mem"].append(peak_gb)
         stats_acc["overhead"].append(overhead_mb)
+        stats_acc["samples_per_sec"].append(samples_per_sec)
+        stats_acc["tokens_per_sec"].append(tokens_per_sec)
 
     # Summary
     print(f"{'='*105}")
     print(f"AVERAGE STATISTICS ({method.upper()} + {peft_mode.upper()})")
     print(f"{'='*105}")
-    print(f"Avg Perturb Time : {np.mean(stats_acc['perturb']):.5f} s")
-    print(f"Avg Forward Time : {np.mean(stats_acc['forward']):.5f} s")
-    print(f"Avg Update Time  : {np.mean(stats_acc['update']):.5f} s")
+    avg_perturb = np.mean(stats_acc['perturb'])
+    avg_forward = np.mean(stats_acc['forward'])
+    avg_update = np.mean(stats_acc['update'])
+    
+    print(f"Avg Perturb Time : {avg_perturb:.5f} s")
+    print(f"Avg Forward Time : {avg_forward:.5f} s")
+    print(f"Avg Update Time  : {avg_update:.5f} s")
     print(f"{'-'*105}")
-    total_time = np.mean(stats_acc['perturb']) + np.mean(stats_acc['forward']) + np.mean(stats_acc['update'])
+    
+    total_time = avg_perturb + avg_forward + avg_update
     print(f"TOTAL STEP TIME  : {total_time:.5f} s")
+
+    if total_time > 0:
+        real_samples_per_sec = batch_size / total_time
+        real_tokens_per_sec = (batch_size * sequence_length) / total_time
+    else:
+        real_samples_per_sec = 0.0
+        real_tokens_per_sec = 0.0
+
     print(f"AVG PEAK MEMORY  : {np.mean(stats_acc['peak_mem']):.4f} GB")
     print(f"AVG OVERHEAD     : {np.mean(stats_acc['overhead']):.2f} MB")
+    
+    print(f"{'-'*105}")
+    print(f"THROUGHPUT METRICS (Corrected Calculation)")
+    print(f"{'-'*105}")
+
+    print(f"Real Samples/sec : {real_samples_per_sec:.2f} samples/s")
+    print(f"Real Tokens/sec  : {real_tokens_per_sec:.2f} tokens/s")
     print(f"{'='*105}")
 
 if __name__ == "__main__":
