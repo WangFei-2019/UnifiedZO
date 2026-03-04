@@ -149,11 +149,10 @@ class BaseZOTrainer(Trainer):
             
         super().log(logs, start_time)
 
-    def compute_loss(self, model, inputs, return_outputs=False):
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None, **kwargs):
         """
         Computes the forward pass and loss.
-        Modified to support multimodal inputs (e.g., pixel_values, image_sizes) 
-        dynamically without hardcoding NLP-specific keys.
+        Modified to support multimodal inputs dynamically and adapt to new HF Trainer APIs.
         """
         # Ensure all tensors are moved to the same device as the model
         inputs = {k: v.to(model.device) if isinstance(v, torch.Tensor) else v for k, v in inputs.items()}

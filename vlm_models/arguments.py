@@ -15,12 +15,25 @@ class VLMModelArguments:
     )
     freeze_vision_tower: bool = field(
         default=True,
-        metadata={"help": "Whether to freeze the vision tower during Zeroth-Order optimization. Highly recommended to save memory."}
+        metadata={"help": "Whether to freeze the vision tower during ZO optimization. Highly recommended to save memory."}
+    )
+    freeze_llm: bool = field(
+        default=False,
+        metadata={"help": "Whether to freeze the LLM backbone."}
     )
     freeze_mm_projector: bool = field(
         default=False,
         metadata={"help": "Whether to freeze the multi-modal projector."}
     )
+    quantize_llm: bool = field(
+        default=True,
+        metadata={"help": "Whether to apply simulated quantization to the LLM backbone."}
+    )
+    quantize_vision: bool = field(
+        default=False,
+        metadata={"help": "Whether to apply simulated quantization to the Vision Tower."}
+    )
+
 
 @dataclass
 class VLMDataArguments:
@@ -29,7 +42,7 @@ class VLMDataArguments:
     """
     data_path: str = field(
         default=None,
-        metadata={"help": "Path to the training data JSON file."}
+        metadata={"help": "Path to the training data JSON file (e.g., 'scienceqa', 'mathvista')."}
     )
     image_folder: Optional[str] = field(
         default=None,

@@ -12,26 +12,37 @@ logger = logging.getLogger(__name__)
 class VLMBaseDataset(Dataset):
     def _apply_chat_template_and_mask(self, image: Image.Image, prompt_text: str, answer_text: str):
         
+        # 1. 预处理图像并获取 pixel_values
         pixel_values = self.processor.image_processor(image, return_tensors="pt")["pixel_values"][0]
         
+        # 2. 获取 Image Token ID (兼容不同的 LLaVA Tokenizer)
         image_token_id = self.processor.tokenizer.convert_tokens_to_ids("<image>")
         if image_token_id is None or image_token_id == self.processor.tokenizer.unk_token_id:
              # Fallback for some specific LLaVA tokenizers
              image_token_id = 32000 
         
+        # 3. 动态计算 Image Token 的数量 (取代硬编码的 576)
+        # 假设 pixel_values 形状为 (C, H, W)，基于 Vision Model 的 patch_size 计算
+        h, w = pixel_values.shape[1], pixel_values.shape[2]
+        patch_size = getattr(self.processor.image_processor, 'patch_size', 14) # CLIP ViT 默认 patch size 为 14
+        num_image_tokens = (h // patch_size) * (w // patch_size)
+        
         prefix_str = "USER: "
         suffix_str = f"\n{prompt_text}\nASSISTANT: "
         
+        # 注意: Prefix 添加了 special tokens (如 BOS)，Suffix 和 Answer 不添加，保证无缝拼接
         prefix_ids = self.processor.tokenizer(prefix_str, add_special_tokens=True, return_tensors="pt")["input_ids"][0]
         suffix_ids = self.processor.tokenizer(suffix_str, add_special_tokens=False, return_tensors="pt")["input_ids"][0]
         answer_ids = self.processor.tokenizer(answer_text, add_special_tokens=False, return_tensors="pt")["input_ids"][0]
         
-        num_image_tokens = 576
+        # 构造图像占位符的 input_ids
         image_ids = torch.full((num_image_tokens,), image_token_id, dtype=torch.long)
         
+        # 拼接 Prompt (Prefix + Image + Suffix)
         prompt_input_ids = torch.cat([prefix_ids, image_ids, suffix_ids])
         prompt_attention_mask = torch.ones_like(prompt_input_ids)
         
+        # 拼接完整的 Input (Prompt + Answer)
         full_input_ids = torch.cat([prompt_input_ids, answer_ids])
         full_attention_mask = torch.ones_like(full_input_ids)
         
@@ -44,10 +55,15 @@ class VLMBaseDataset(Dataset):
         }
 
 class ScienceQADataset(VLMBaseDataset):
-    def __init__(self, split: str = "train", processor: transformers.ProcessorMixin = None):
+    def __init__(self, 
+                 split: str = "train", 
+                 processor: transformers.ProcessorMixin = None,
+                 data_dir: str = "/workspace/wangfei154/datasets/derek-thomas/ScienceQA"):
         super().__init__()
-        logger.info(f"Loading ScienceQA dataset (split: {split})...")
-        raw_dataset = load_dataset("/workspace/wangfei154/datasets/derek-thomas/ScienceQA", split=split)
+        logger.info(f"Loading ScienceQA dataset from local path {data_dir} (split: {split})...")
+        # 强制离线加载: 依赖于你本地 /workspace/ 下已经缓存或解压好的 arrow/json 数据
+        raw_dataset = load_dataset(data_dir, split=split)
+        
         self.dataset = raw_dataset.filter(lambda x: x['image'] is not None)
         self.processor = processor
         self.choice_map = {0: "A", 1: "B", 2: "C", 3: "D", 4: "E", 5: "F"}
@@ -65,10 +81,15 @@ class ScienceQADataset(VLMBaseDataset):
         return self._apply_chat_template_and_mask(image, prompt, answer)
 
 class MathVistaDataset(VLMBaseDataset):
-    def __init__(self, split: str = "train", processor: transformers.ProcessorMixin = None):
+    def __init__(self, 
+                 split: str = "train", 
+                 processor: transformers.ProcessorMixin = None,
+                 data_dir: str = "/workspace/wangfei154/datasets/AI4Math/MathVista"):
         super().__init__()
-        logger.info(f"Loading MathVista dataset (split: {split}) for complex reasoning evaluation...")
-        raw_dataset = load_dataset("/workspace/wangfei154/datasets/AI4Math/MathVista", split=split)
+        logger.info(f"Loading MathVista dataset from local path {data_dir} (split: {split}) for complex reasoning...")
+        # 强制离线加载
+        raw_dataset = load_dataset(data_dir, split=split)
+        
         self.dataset = raw_dataset
         self.processor = processor
 
@@ -114,7 +135,7 @@ class DataCollatorForVLM:
                 padded_ids = torch.cat([torch.full((pad_len,), pad_token_id, dtype=torch.long), ids])
                 padded_mask = torch.cat([torch.zeros((pad_len,), dtype=torch.long), mask])
                 label = padded_ids.clone()
-                label[:pad_len + prompt_len] = -100 # Precise Masking: Padding + Prompt
+                label[:pad_len + prompt_len] = -100 # Precise Masking: Padding + Prompt (Only learn answer)
             else:
                 padded_ids = torch.cat([ids, torch.full((pad_len,), pad_token_id, dtype=torch.long)])
                 padded_mask = torch.cat([mask, torch.zeros((pad_len,), dtype=torch.long)])

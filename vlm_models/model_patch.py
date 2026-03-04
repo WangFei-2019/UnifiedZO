@@ -1,85 +1,81 @@
 import torch
 import logging
-from transformers import AutoProcessor
-from gptqmodel import GPTQModel
+from transformers import AutoProcessor, AutoModelForVision2Seq
+from vlm_sim_quant import apply_vlm_simulated_quantization 
 
 logger = logging.getLogger(__name__)
 
 def load_vlm_and_processor(model_args, training_args=None):
-    """
-    Robust instantiation of Vision-Language Models for Zeroth-Order Optimization.
-    Ensures precise DType alignment and strict padding token initialization.
-    """
     logger.info(f"Loading processor from {model_args.model_name_or_path}...")
-    processor = AutoProcessor.from_pretrained(
-        model_args.model_name_or_path, 
-        trust_remote_code=True, 
-        # use_fast=False
-        )
-
-    if not hasattr(processor, "tokenizer") or not hasattr(processor, "image_processor"):
-        logger.error(f"Catastrophic failure: Expected a multi-modal Processor, but got {type(processor)}.")
-        raise ValueError(
-            "Your local model directory is heavily missing multi-modal configuration files "
-            "(e.g., 'preprocessor_config.json' or 'processor_config.json'). "
-            "AutoProcessor degraded to a pure text tokenizer. Please download the missing files."
-        )
-
+    processor = AutoProcessor.from_pretrained(model_args.model_name_or_path, trust_remote_code=True)
     if processor.tokenizer.pad_token is None:
-        logger.warning("Tokenizer lacks a pad_token. Assigning eos_token as pad_token to prevent collator crashes.")
         processor.tokenizer.pad_token = processor.tokenizer.eos_token
-        
-    # Ensure padding side is left for decoder-only generation (standard practice)
     processor.tokenizer.padding_side = "left"
 
-    # Determine optimal precision for unquantized modules (Vision Tower, Projector)
-    target_dtype = torch.float16
-    if training_args is not None and getattr(training_args, 'bf16', False):
-        target_dtype = torch.bfloat16
-
-    logger.info(f"Loading GPTQ VLM model {model_args.model_name_or_path} with precision {target_dtype}...")
-    
-    # Load model with explicit torch_dtype to prevent FP32 memory explosion
-    model = GPTQModel.from_quantized(
+    target_dtype = torch.bfloat16 if getattr(training_args, 'bf16', False) else torch.float16
+    model = AutoModelForVision2Seq.from_pretrained(
         model_args.model_name_or_path,
         trust_remote_code=True,
         device_map="auto",
         torch_dtype=target_dtype
     )
 
-    # Ensure the library successfully wrapped the linear layers into Triton/Marlin QuantLinear
-    # This is an absolute prerequisite for our QZOTrainer to find the `.scales` parameters.
-    quantized_layer_found = any(
-        "QuantLinear" in str(type(module)) for module in model.modules()
-    )
-    if not quantized_layer_found:
-        logger.error("VLM Architecture mismatch: GPTQModel failed to inject QuantLinear layers. QZOTrainer will fail.")
-        raise RuntimeError("Model loading failed: No QuantLinear layers detected. Check if gptqmodel supports this specific LLaVA variant.")
+    # --- 步骤 1：读取控制参数 ---
+    # 假设你在 argument 中新增了这几个参数，如果没写，默认为标准的只微调 LLM 模式
+    quantize_vision = getattr(model_args, 'quantize_vision', False)
+    quantize_llm = getattr(model_args, 'quantize_llm', True)
     
-    model.is_quantized = True
+    freeze_vision = getattr(model_args, 'freeze_vision_tower', True)
+    freeze_llm = getattr(model_args, 'freeze_llm', False)
+    freeze_projector = getattr(model_args, 'freeze_mm_projector', False)
 
-    if getattr(model_args, 'freeze_vision_tower', True):
-        logger.info("Enforcing strict gradient freeze on the Vision Tower...")
-        # Supports LLaVA standard names, add Qwen/other architectures dynamically
-        vision_modules = ["vision_tower", "visual", "vision_model"]
-        for module_name in vision_modules:
-            if hasattr(model, module_name):
-                for param in getattr(model, module_name).parameters():
-                    param.requires_grad = False
-                logger.info(f"Successfully frozen: {module_name}")
-                break
-            
-    if getattr(model_args, 'freeze_mm_projector', False):
-        logger.info("Enforcing strict gradient freeze on the Multi-Modal Projector...")
-        projector_modules = ["multi_modal_projector", "projector"]
-        for module_name in projector_modules:
-            if hasattr(model, module_name):
-                for param in getattr(model, module_name).parameters():
-                    param.requires_grad = False
-                logger.info(f"Successfully frozen: {module_name}")
-                break
+    # --- 步骤 2：执行量化注入 ---
+    quant_method = getattr(model_args, 'quant_method', 'sim_quant')
+    if quant_method in ["sim_quant", "qzo", "lqzo"]:
+        model = apply_vlm_simulated_quantization(
+            model, bits=4, 
+            quantize_llm=quantize_llm, 
+            quantize_vision=quantize_vision
+        )
+        model.is_quantized = True
+    else:
+        model.is_quantized = False
 
-    # For ZO Optimization, we optionally sync pad_token_id to model config
+    # --- 步骤 3：执行梯度/微调控制 ---
+    logger.info("Enforcing parameter requires_grad rules based on configuration...")
+    for name, param in model.named_parameters():
+        # 默认全部冻结
+        param.requires_grad = False
+        
+        # [控制区块 A]：Vision Tower
+        if "vision_tower" in name:
+            if not freeze_vision:
+                # 如果量化了 Vision，那么只微调 scales (和 bias)
+                if quantize_vision:
+                    if "scales" in name or "bias" in name: param.requires_grad = True
+                # 如果没量化，说明是全参微调 (FP16/BF16)
+                else:
+                    param.requires_grad = True
+                    
+        # [控制区块 B]：LLM Backbone
+        elif "language_model" in name or "lm_head" in name:
+            if not freeze_llm:
+                if quantize_llm:
+                    # 注意：lm_head 通常保持高精度全参微调
+                    if "scales" in name or "bias" in name or "lm_head" in name: 
+                        param.requires_grad = True
+                else:
+                    param.requires_grad = True
+                    
+        # [控制区块 C]：多模态投影层 Projector
+        elif "multi_modal_projector" in name:
+            if not freeze_projector:
+                param.requires_grad = True
+
+    # 打印可训练参数供核对
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    logger.info(f"Total trainable parameters: {trainable_params:,}")
+
     if hasattr(model.config, 'pad_token_id') and model.config.pad_token_id is None:
         model.config.pad_token_id = processor.tokenizer.pad_token_id
 
