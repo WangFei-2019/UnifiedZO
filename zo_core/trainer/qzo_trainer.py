@@ -45,10 +45,13 @@ class QZOTrainer(BaseZOTrainer):
         if self.args.momentum:
             self._init_momentum_buffers()
 
-        if hasattr(self.model.config, "quantization_config"):
-            self.args.zoquantified_scale = 2 ** (4 - self.model.config.quantization_config.bits)
+        if hasattr(self.model.config, "quantization_config") and self.model.config.quantization_config is not None:
+            q_config = self.model.config.quantization_config
+            bits = q_config.get("bits", 4) if isinstance(q_config, dict) else getattr(q_config, "bits", 4)
+            self.args.zoquantified_scale = 2 ** (4 - bits)
         else:
-            self.args.zoquantified_scale = 2 ** (4 - self.args.quantized_bit) 
+            fallback_bits = getattr(self.args, "quantized_bit", 4)
+            self.args.zoquantified_scale = 2 ** (4 - fallback_bits)
         
     def _identify_quantized_params(self):
         """
