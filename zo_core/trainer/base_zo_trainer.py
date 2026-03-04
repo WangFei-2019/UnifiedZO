@@ -148,3 +148,21 @@ class BaseZOTrainer(Trainer):
             logs["projected_grad"] = val
             
         super().log(logs, start_time)
+
+    def compute_loss(self, model, inputs, return_outputs=False):
+        """
+        Computes the forward pass and loss.
+        Modified to support multimodal inputs (e.g., pixel_values, image_sizes) 
+        dynamically without hardcoding NLP-specific keys.
+        """
+        # Ensure all tensors are moved to the same device as the model
+        inputs = {k: v.to(model.device) if isinstance(v, torch.Tensor) else v for k, v in inputs.items()}
+        
+        # Unpack the entire inputs dictionary dynamically.
+        # For VLMs, this will naturally include 'pixel_values' and 'image_sizes'.
+        outputs = model(**inputs)
+        
+        # Extract the loss
+        loss = outputs.get("loss") if isinstance(outputs, dict) else outputs[0]
+        
+        return (loss, outputs) if return_outputs else loss
