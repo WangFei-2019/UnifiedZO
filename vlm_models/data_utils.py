@@ -1,6 +1,6 @@
 import torch
 from dataclasses import dataclass
-from typing import Dict, Sequence
+from typing import Dict, Sequence, List
 import transformers
 from torch.utils.data import Dataset
 from datasets import load_dataset
@@ -11,41 +11,44 @@ logger = logging.getLogger(__name__)
 
 class VLMBaseDataset(Dataset):
     def _apply_chat_template_and_mask(self, image: Image.Image, prompt_text: str, answer_text: str):
-        
+        """
+        核心数据构造契约：
+        确保返回所有 UnifiedZO 评估所需的键值，包括用于 Variance Reduction 的 prompt 掩码。
+        """
         # 1. 预处理图像并获取 pixel_values
         pixel_values = self.processor.image_processor(image, return_tensors="pt")["pixel_values"][0]
         
-        # 2. 获取 Image Token ID (兼容不同的 LLaVA Tokenizer)
+        # 2. 获取 Image Token ID (兼容 LLaVA-1.5 及后续变体)
         image_token_id = self.processor.tokenizer.convert_tokens_to_ids("<image>")
         if image_token_id is None or image_token_id == self.processor.tokenizer.unk_token_id:
-             # Fallback for some specific LLaVA tokenizers
+             # Fallback: 32000 是 LLaVA 默认的视觉占位符 ID
              image_token_id = 32000 
         
-        # 3. 动态计算 Image Token 的数量 (取代硬编码的 576)
-        # 假设 pixel_values 形状为 (C, H, W)，基于 Vision Model 的 patch_size 计算
+        # 3. [架构优化] 动态计算 Image Token 数量
+        # 取代硬编码的 576，根据视觉塔的实际输入尺寸和 patch_size 动态推导
         h, w = pixel_values.shape[1], pixel_values.shape[2]
-        patch_size = getattr(self.processor.image_processor, 'patch_size', 14) # CLIP ViT 默认 patch size 为 14
+        patch_size = getattr(self.processor.image_processor, 'patch_size', 14)
         num_image_tokens = (h // patch_size) * (w // patch_size)
         
         prefix_str = "USER: "
         suffix_str = f"\n{prompt_text}\nASSISTANT: "
         
-        # 注意: Prefix 添加了 special tokens (如 BOS)，Suffix 和 Answer 不添加，保证无缝拼接
+        # 4. Tokenization (Prefix 带 BOS，Suffix/Answer 不带，实现无缝拼接)
         prefix_ids = self.processor.tokenizer(prefix_str, add_special_tokens=True, return_tensors="pt")["input_ids"][0]
         suffix_ids = self.processor.tokenizer(suffix_str, add_special_tokens=False, return_tensors="pt")["input_ids"][0]
         answer_ids = self.processor.tokenizer(answer_text, add_special_tokens=False, return_tensors="pt")["input_ids"][0]
         
-        # 构造图像占位符的 input_ids
+        # 构造图像占位符
         image_ids = torch.full((num_image_tokens,), image_token_id, dtype=torch.long)
         
-        # 拼接 Prompt (Prefix + Image + Suffix)
+        # 5. 拼接 Prompt 与 Full Input
         prompt_input_ids = torch.cat([prefix_ids, image_ids, suffix_ids])
         prompt_attention_mask = torch.ones_like(prompt_input_ids)
         
-        # 拼接完整的 Input (Prompt + Answer)
         full_input_ids = torch.cat([prompt_input_ids, answer_ids])
         full_attention_mask = torch.ones_like(full_input_ids)
         
+        # 返回满足架构契约的字典
         return {
             "input_ids": full_input_ids,
             "attention_mask": full_attention_mask,
@@ -60,8 +63,8 @@ class ScienceQADataset(VLMBaseDataset):
                  processor: transformers.ProcessorMixin = None,
                  data_dir: str = "/workspace/wangfei154/datasets/derek-thomas/ScienceQA"):
         super().__init__()
-        logger.info(f"Loading ScienceQA dataset from local path {data_dir} (split: {split})...")
-        # 强制离线加载: 依赖于你本地 /workspace/ 下已经缓存或解压好的 arrow/json 数据
+        logger.info(f"Loading ScienceQA from {data_dir} (split: {split})")
+        # 离线环境强制加载本地数据
         raw_dataset = load_dataset(data_dir, split=split)
         
         self.dataset = raw_dataset.filter(lambda x: x['image'] is not None)
@@ -86,8 +89,7 @@ class MathVistaDataset(VLMBaseDataset):
                  processor: transformers.ProcessorMixin = None,
                  data_dir: str = "/workspace/wangfei154/datasets/AI4Math/MathVista"):
         super().__init__()
-        logger.info(f"Loading MathVista dataset from local path {data_dir} (split: {split}) for complex reasoning...")
-        # 强制离线加载
+        logger.info(f"Loading MathVista from {data_dir} (split: {split})")
         raw_dataset = load_dataset(data_dir, split=split)
         
         self.dataset = raw_dataset
@@ -107,7 +109,24 @@ class MathVistaDataset(VLMBaseDataset):
 class DataCollatorForVLM:
     processor: transformers.ProcessorMixin
 
-    def __call__(self, instances: Sequence[Dict]) -> Dict[str, torch.Tensor]:
+    def __call__(self, instances: List[Dict]) -> Dict[str, torch.Tensor]:
+        """
+        防卫式数据整理：
+        1. 检查 Schema 完整性，防止上游 remove_unused_columns 破坏数据。
+        2. 动态处理 Padding 对齐。
+        """
+        if not instances:
+            return {}
+
+        # [架构补丁]：校验关键键值是否存在，Fail-Fast 拦截 KeyError
+        required_keys = ["input_ids", "attention_mask", "pixel_values", "prompt_input_ids"]
+        for k in required_keys:
+            if k not in instances[0]:
+                raise ValueError(
+                    f"Architecture Error: Key '{k}' missing in Collator. "
+                    f"Check if 'remove_unused_columns' is False in run_vlm.py."
+                )
+
         input_ids = [inst["input_ids"] for inst in instances]
         attention_mask = [inst["attention_mask"] for inst in instances]
         pixel_values = [inst["pixel_values"] for inst in instances]
@@ -131,18 +150,20 @@ class DataCollatorForVLM:
             
             pad_len = max_len - seq_len
             
+            # 执行 Padding 与 Label Masking (标签平移)
             if side == "left":
                 padded_ids = torch.cat([torch.full((pad_len,), pad_token_id, dtype=torch.long), ids])
                 padded_mask = torch.cat([torch.zeros((pad_len,), dtype=torch.long), mask])
                 label = padded_ids.clone()
-                label[:pad_len + prompt_len] = -100 # Precise Masking: Padding + Prompt (Only learn answer)
+                # 只有 Answer Token 参与 Loss 计算
+                label[:pad_len + prompt_len] = -100 
             else:
                 padded_ids = torch.cat([ids, torch.full((pad_len,), pad_token_id, dtype=torch.long)])
                 padded_mask = torch.cat([mask, torch.zeros((pad_len,), dtype=torch.long)])
                 label = padded_ids.clone()
-                label[:prompt_len] = -100 # Precise Masking: Prompt
+                label[:prompt_len] = -100
                 if pad_len > 0:
-                    label[-pad_len:] = -100 # Precise Masking: Right Padding
+                    label[-pad_len:] = -100
                     
             padded_input_ids.append(padded_ids)
             padded_attention_mask.append(padded_mask)
@@ -155,6 +176,7 @@ class DataCollatorForVLM:
             "pixel_values": torch.stack(pixel_values),
             "option_len": torch.tensor(option_lens, dtype=torch.long)
         }
+        
         if "image_sizes" in instances[0]:
             batch["image_sizes"] = torch.stack([inst["image_sizes"] for inst in instances])
             

@@ -33,6 +33,11 @@ class VLMModelArguments:
         default=False,
         metadata={"help": "Whether to apply simulated quantization to the Vision Tower."}
     )
+    
+    quantized_bit: int = field(
+        default=-1,
+        metadata={"help": "Target bit-width for quantization (e.g., 2, 4, 8). Default is 4."}
+    )
 
 
 @dataclass

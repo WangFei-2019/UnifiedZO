@@ -31,9 +31,11 @@ class SimulatedQuantLinear(nn.Module):
         self.scales.data = max_val / self.qmax
 
     def fake_quantize(self):
-        w_q = torch.round(self.weight / self.scales)
+        safe_scales = torch.clamp(self.scales, min=1e-7)
+
+        w_q = torch.round(self.weight / safe_scales)
         w_q = torch.clamp(w_q, self.qmin, self.qmax)
-        w_dq = w_q * self.scales
+        w_dq = w_q * safe_scales
         return w_dq
 
     def forward(self, input):

@@ -8,7 +8,7 @@ OUTPUT_DIR="./checkpoints/${DATASET}_lqzo_13b_academic"
 # Experimental Settings
 SEED=42
 ZO_EPS=1e-3
-LR=5e-7
+LR=1e-7
 
 echo "=================================================="
 echo "Initiating Rigorous VLM Zeroth-Order Optimization (LQZO)"
@@ -21,6 +21,7 @@ python run_vlm.py \
     --model_name_or_path "$MODEL_NAME" \
     --data_path "$DATASET" \
     --quant_method "sim_quant" \
+    --quantized_bit 4 \
     --freeze_vision_tower True \
     --freeze_mm_projector False \
     --output_dir "$OUTPUT_DIR" \

@@ -29,11 +29,15 @@ def load_vlm_and_processor(model_args, training_args=None):
     freeze_llm = getattr(model_args, 'freeze_llm', False)
     freeze_projector = getattr(model_args, 'freeze_mm_projector', False)
 
-    # --- 步骤 2：执行量化注入 ---
     quant_method = getattr(model_args, 'quant_method', 'sim_quant')
+    
+    quant_bits = getattr(model_args, 'quantized_bit', getattr(training_args, 'quantized_bit', 4))
+    
     if quant_method in ["sim_quant", "qzo", "lqzo"]:
+        logger.info(f"Triggering dynamic FakeQuant injection with {quant_bits}-bit...")
         model = apply_vlm_simulated_quantization(
-            model, bits=4, 
+            model, 
+            bits=quant_bits,
             quantize_llm=quantize_llm, 
             quantize_vision=quantize_vision
         )

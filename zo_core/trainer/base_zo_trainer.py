@@ -157,9 +157,14 @@ class BaseZOTrainer(Trainer):
         # Ensure all tensors are moved to the same device as the model
         inputs = {k: v.to(model.device) if isinstance(v, torch.Tensor) else v for k, v in inputs.items()}
         
+        forward_signature = inspect.signature(model.forward).parameters
+        
+        allowed_keys = set(forward_signature.keys()).union({"option_len", "pixel_values", "image_sizes"})
+        safe_inputs = {k: v for k, v in inputs.items() if k in allowed_keys}
+
         # Unpack the entire inputs dictionary dynamically.
         # For VLMs, this will naturally include 'pixel_values' and 'image_sizes'.
-        outputs = model(**inputs)
+        outputs = model(**safe_inputs)
         
         # Extract the loss
         loss = outputs.get("loss") if isinstance(outputs, dict) else outputs[0]
