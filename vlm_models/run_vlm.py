@@ -4,6 +4,8 @@ import logging
 import transformers
 from transformers import set_seed
 import wandb
+import torch
+import numpy as np
 from dataclasses import asdict
 from arguments import VLMModelArguments, VLMDataArguments
 from data_utils import DataCollatorForVLM, ScienceQADataset, MathVistaDataset
@@ -14,11 +16,14 @@ from zo_core.trainer import get_trainer_class
 from zo_core.arguments import ZOTrainingArguments
 from zo_core.trainer.utils import forward_wrap_with_option_len
 
+from evaluation import preprocess_logits_for_metrics, compute_token_metrics, evaluate_vlm_predictions
+
 logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+
 
 def main():
     parser = transformers.HfArgumentParser((VLMModelArguments, VLMDataArguments, ZOTrainingArguments))
@@ -68,6 +73,8 @@ def main():
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         data_collator=data_collator,
+        compute_metrics=compute_token_metrics,
+        preprocess_logits_for_metrics=preprocess_logits_for_metrics,
     )
 
     if training_args.trainer.lower() != "none":
@@ -75,9 +82,18 @@ def main():
         trainer.train()
     
     if not training_args.no_eval:
-        logger.info("Running evaluation...")
-        metrics = trainer.evaluate()
-        logger.info(f"Final Metrics: {metrics}")
+        # =========================================================================
+        # Evaluation
+        # =========================================================================
+        logger.info("Running evaluation and extracting metrics...")
+        predict_results = trainer.predict(eval_dataset)
+        metrics = predict_results.metrics
+        
+        dataset_name = getattr(data_args, 'data_path', 'scienceqa')
+        metrics = evaluate_vlm_predictions(predict_results, dataset_name, metrics, logger)
+        
+        trainer.log(metrics)
+        trainer.save_metrics("eval", metrics)
 
     if hasattr(model, 'original_forward'):
         model.forward = model.original_forward

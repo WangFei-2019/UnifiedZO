@@ -1,9 +1,11 @@
 from typing import Optional
 import torch
 import numpy as np
+import inspect
 from transformers import Trainer
 from transformers.utils import logging
 from zo_core.metrics import f1
+
 logger = logging.get_logger(__name__)
 
 class BaseZOTrainer(Trainer):
@@ -12,9 +14,7 @@ class BaseZOTrainer(Trainer):
     Handles common logic like optimizer creation (dummy), scheduler, and identifying optimization parameters.
     """
 
-    def __init__(self, model, args =None, zo_evaluator=None, raw_dev_samples=None, raw_test_samples=None, **kwargs):
-        # if args.trainer != "regular":
-        #     args.lr_scheduler_type = "constant"
+    def __init__(self, model, args=None, zo_evaluator=None, raw_dev_samples=None, raw_test_samples=None, **kwargs):
         super().__init__(model=model, args=args, **kwargs)
         
         # Identify parameters to optimize (requires_grad=True)
@@ -152,21 +152,50 @@ class BaseZOTrainer(Trainer):
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None, **kwargs):
         """
         Computes the forward pass and loss.
-        Modified to support multimodal inputs dynamically and adapt to new HF Trainer APIs.
+        Robust parameter filtering prevents 'unexpected keyword argument' crashes,
+        while maintaining compatibility with newer HF Trainers.
         """
-        # Ensure all tensors are moved to the same device as the model
+        # 1. Ensure all tensors are moved to the same device as the model
         inputs = {k: v.to(model.device) if isinstance(v, torch.Tensor) else v for k, v in inputs.items()}
         
+        # 2. Dynamically get the parameters supported by the model's forward method
         forward_signature = inspect.signature(model.forward).parameters
         
-        allowed_keys = set(forward_signature.keys()).union({"option_len", "pixel_values", "image_sizes"})
-        safe_inputs = {k: v for k, v in inputs.items() if k in allowed_keys}
+        # If the model's forward method natively accepts **kwargs (VAR_KEYWORD), strict filtering is not needed
+        has_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in forward_signature.values())
+        
+        if has_kwargs:
+            safe_inputs = inputs
+        else:
+            # 3. Build a set of allowed safe parameters
+            # 'labels' is essential, 'option_len' is our custom key, and multimodal keys are preserved
+            allowed_keys = set(forward_signature.keys()).union({
+                "option_len", "pixel_values", "image_sizes", "labels"
+            })
+            # Filter out parameters the model does not recognize (preventing extra keys from DataCollator from causing crashes)
+            safe_inputs = {k: v for k, v in inputs.items() if k in allowed_keys}
 
-        # Unpack the entire inputs dictionary dynamically.
-        # For VLMs, this will naturally include 'pixel_values' and 'image_sizes'.
+        # Force the model NOT to return past_key_values (DynamicCache) which breaks accelerator padding
+        if "use_cache" in forward_signature or has_kwargs:
+            safe_inputs["use_cache"] = False
+
+        # 4. Execute the forward pass
         outputs = model(**safe_inputs)
         
-        # Extract the loss
+        # 5. Extract the loss
         loss = outputs.get("loss") if isinstance(outputs, dict) else outputs[0]
         
-        return (loss, outputs) if return_outputs else loss
+        # 6. Sanitize outputs to prevent DynamicCache from crashing HF Accelerator during evaluation
+        if return_outputs:
+            if isinstance(outputs, dict):
+                # Only keep tensors to be safe
+                clean_outputs = {k: v for k, v in outputs.items() if isinstance(v, torch.Tensor)}
+                return (loss, clean_outputs)
+            elif isinstance(outputs, tuple):
+                # Filter out non-tensor elements like DynamicCache from tuples
+                clean_outputs = tuple(v for v in outputs if isinstance(v, torch.Tensor))
+                return (loss, clean_outputs)
+            else:
+                return (loss, outputs)
+                
+        return loss

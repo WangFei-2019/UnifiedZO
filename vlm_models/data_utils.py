@@ -12,49 +12,36 @@ logger = logging.getLogger(__name__)
 class VLMBaseDataset(Dataset):
     def _apply_chat_template_and_mask(self, image: Image.Image, prompt_text: str, answer_text: str):
         """
-        核心数据构造契约：
-        确保返回所有 UnifiedZO 评估所需的键值，包括用于 Variance Reduction 的 prompt 掩码。
+        Prepares multimodal inputs conforming strictly to Hugging Face's LLaVA architecture.
+        Delegates <image> token expansion to the official processor to prevent token-feature mismatch.
         """
-        # 1. 预处理图像并获取 pixel_values
-        pixel_values = self.processor.image_processor(image, return_tensors="pt")["pixel_values"][0]
+        # 1. Standardize prompt
+        prompt_str = f"USER: <image>\n{prompt_text}\nASSISTANT: "
         
-        # 2. 获取 Image Token ID (兼容 LLaVA-1.5 及后续变体)
-        image_token_id = self.processor.tokenizer.convert_tokens_to_ids("<image>")
-        if image_token_id is None or image_token_id == self.processor.tokenizer.unk_token_id:
-             # Fallback: 32000 是 LLaVA 默认的视觉占位符 ID
-             image_token_id = 32000 
+        # 2. Let the processor automatically expand <image> to 576 tokens
+        # and generate the corresponding pixel_values simultaneously.
+        prompt_inputs = self.processor(text=prompt_str, images=image, return_tensors="pt")
         
-        # 3. [架构优化] 动态计算 Image Token 数量
-        # 取代硬编码的 576，根据视觉塔的实际输入尺寸和 patch_size 动态推导
-        h, w = pixel_values.shape[1], pixel_values.shape[2]
-        patch_size = getattr(self.processor.image_processor, 'patch_size', 14)
-        num_image_tokens = (h // patch_size) * (w // patch_size)
+        prompt_ids = prompt_inputs["input_ids"][0]
+        prompt_mask = prompt_inputs["attention_mask"][0]
+        pixel_values = prompt_inputs["pixel_values"][0]
         
-        prefix_str = "USER: "
-        suffix_str = f"\n{prompt_text}\nASSISTANT: "
+        # 3. Tokenize the answer text seamlessly (without redundant BOS tokens)
+        answer_ids = self.processor.tokenizer(
+            answer_text, add_special_tokens=False, return_tensors="pt"
+        )["input_ids"][0]
+        answer_mask = torch.ones_like(answer_ids)
         
-        # 4. Tokenization (Prefix 带 BOS，Suffix/Answer 不带，实现无缝拼接)
-        prefix_ids = self.processor.tokenizer(prefix_str, add_special_tokens=True, return_tensors="pt")["input_ids"][0]
-        suffix_ids = self.processor.tokenizer(suffix_str, add_special_tokens=False, return_tensors="pt")["input_ids"][0]
-        answer_ids = self.processor.tokenizer(answer_text, add_special_tokens=False, return_tensors="pt")["input_ids"][0]
+        # 4. Concatenate prompt and answer
+        full_input_ids = torch.cat([prompt_ids, answer_ids])
+        full_attention_mask = torch.cat([prompt_mask, answer_mask])
         
-        # 构造图像占位符
-        image_ids = torch.full((num_image_tokens,), image_token_id, dtype=torch.long)
-        
-        # 5. 拼接 Prompt 与 Full Input
-        prompt_input_ids = torch.cat([prefix_ids, image_ids, suffix_ids])
-        prompt_attention_mask = torch.ones_like(prompt_input_ids)
-        
-        full_input_ids = torch.cat([prompt_input_ids, answer_ids])
-        full_attention_mask = torch.ones_like(full_input_ids)
-        
-        # 返回满足架构契约的字典
         return {
             "input_ids": full_input_ids,
             "attention_mask": full_attention_mask,
             "pixel_values": pixel_values,
-            "prompt_input_ids": prompt_input_ids,
-            "prompt_attention_mask": prompt_attention_mask
+            "prompt_input_ids": prompt_ids,
+            "prompt_attention_mask": prompt_mask
         }
 
 class ScienceQADataset(VLMBaseDataset):
@@ -64,7 +51,7 @@ class ScienceQADataset(VLMBaseDataset):
                  data_dir: str = "/workspace/wangfei154/datasets/derek-thomas/ScienceQA"):
         super().__init__()
         logger.info(f"Loading ScienceQA from {data_dir} (split: {split})")
-        # 离线环境强制加载本地数据
+
         raw_dataset = load_dataset(data_dir, split=split)
         
         self.dataset = raw_dataset.filter(lambda x: x['image'] is not None)
@@ -111,21 +98,16 @@ class DataCollatorForVLM:
 
     def __call__(self, instances: List[Dict]) -> Dict[str, torch.Tensor]:
         """
-        防卫式数据整理：
-        1. 检查 Schema 完整性，防止上游 remove_unused_columns 破坏数据。
-        2. 动态处理 Padding 对齐。
+        Dynamic padding and label masking collator.
+        Properly ignores prompt tokens and dynamically pads answers.
         """
         if not instances:
             return {}
 
-        # [架构补丁]：校验关键键值是否存在，Fail-Fast 拦截 KeyError
         required_keys = ["input_ids", "attention_mask", "pixel_values", "prompt_input_ids"]
         for k in required_keys:
             if k not in instances[0]:
-                raise ValueError(
-                    f"Architecture Error: Key '{k}' missing in Collator. "
-                    f"Check if 'remove_unused_columns' is False in run_vlm.py."
-                )
+                raise ValueError(f"Architecture Error: Key '{k}' missing. Set remove_unused_columns=False.")
 
         input_ids = [inst["input_ids"] for inst in instances]
         attention_mask = [inst["attention_mask"] for inst in instances]
@@ -133,7 +115,10 @@ class DataCollatorForVLM:
         prompt_input_ids = [inst["prompt_input_ids"] for inst in instances]
         
         pad_token_id = self.processor.tokenizer.pad_token_id
-        side = self.processor.tokenizer.padding_side
+        if pad_token_id is None:
+            pad_token_id = self.processor.tokenizer.eos_token_id
+            
+        side = getattr(self.processor.tokenizer, 'padding_side', 'right') # Defaulting to right for generation safety
         max_len = max(len(ids) for ids in input_ids)
         
         padded_input_ids, padded_attention_mask, labels, option_lens = [], [], [], []
@@ -150,20 +135,19 @@ class DataCollatorForVLM:
             
             pad_len = max_len - seq_len
             
-            # 执行 Padding 与 Label Masking (标签平移)
+            # Pad and construct labels
             if side == "left":
                 padded_ids = torch.cat([torch.full((pad_len,), pad_token_id, dtype=torch.long), ids])
                 padded_mask = torch.cat([torch.zeros((pad_len,), dtype=torch.long), mask])
                 label = padded_ids.clone()
-                # 只有 Answer Token 参与 Loss 计算
-                label[:pad_len + prompt_len] = -100 
+                label[:pad_len + prompt_len] = -100 # Mask padding and prompt
             else:
                 padded_ids = torch.cat([ids, torch.full((pad_len,), pad_token_id, dtype=torch.long)])
                 padded_mask = torch.cat([mask, torch.zeros((pad_len,), dtype=torch.long)])
                 label = padded_ids.clone()
-                label[:prompt_len] = -100
+                label[:prompt_len] = -100 # Mask prompt
                 if pad_len > 0:
-                    label[-pad_len:] = -100
+                    label[-pad_len:] = -100 # Mask padding
                     
             padded_input_ids.append(padded_ids)
             padded_attention_mask.append(padded_mask)
@@ -176,8 +160,5 @@ class DataCollatorForVLM:
             "pixel_values": torch.stack(pixel_values),
             "option_len": torch.tensor(option_lens, dtype=torch.long)
         }
-        
-        if "image_sizes" in instances[0]:
-            batch["image_sizes"] = torch.stack([inst["image_sizes"] for inst in instances])
             
         return batch

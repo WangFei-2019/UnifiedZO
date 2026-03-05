@@ -8,7 +8,7 @@ OUTPUT_DIR="./checkpoints/${DATASET}_lqzo_13b_academic"
 # Experimental Settings
 SEED=42
 ZO_EPS=1e-3
-LR=1e-7
+LR=5e-7
 
 echo "=================================================="
 echo "Initiating Rigorous VLM Zeroth-Order Optimization (LQZO)"
@@ -29,7 +29,7 @@ python run_vlm.py \
     --zo_eps $ZO_EPS \
     --learning_rate $LR \
     --seed $SEED \
-    --only_train_option True \
+    --only_train_option True \v
     --per_device_train_batch_size 4 \
     --gradient_accumulation_steps 1 \
     --max_steps 20000 \
@@ -45,4 +45,5 @@ python run_vlm.py \
     --quantize_llm True \
     --freeze_llm False \
     --quantize_vision False \
-    --freeze_vision_tower True
+    --freeze_vision_tower True \
+    --load_best_model_at_end True 
