@@ -45,6 +45,14 @@ class QZOTrainer(BaseZOTrainer):
         if self.args.momentum:
             self._init_momentum_buffers()
 
+        if hasattr(self.model.config, "quantization_config") and self.model.config.quantization_config is not None:
+            q_config = self.model.config.quantization_config
+            bits = q_config.get("bits", 4) if isinstance(q_config, dict) else getattr(q_config, "bits", 4)
+            self.args.zoquantified_scale = 2 ** (4 - bits)
+        else:
+            fallback_bits = getattr(self.args, "quantized_bit", 4)
+            self.args.zoquantified_scale = 2 ** (4 - fallback_bits)
+        
     def _identify_quantized_params(self):
         """
         Identify which parameters are quantization scales and which are regular float16 params.
@@ -73,8 +81,21 @@ class QZOTrainer(BaseZOTrainer):
             except ImportError:
                 logger.warning("AQLM modules not found. Ensure aqlm is installed.")
         
+        else:
+            found_sim_quant = False
+            for name, module in self.model.named_modules():
+                if module.__class__.__name__ == "SimulatedQuantLinear":
+                    if hasattr(module, "scales") and isinstance(module.scales, torch.nn.Parameter):
+                        self.fp16_to_optimize['scales'].append((name, module.scales))
+                        found_sim_quant = True
+            
+            if found_sim_quant:
+                logger.info(f"Successfully identified {len(self.fp16_to_optimize['scales'])} Simulated Quantized layers.")
+        
         # Identify regular parameters (bias, norm, etc.)
         for name, param in self.model.named_parameters():
+            if "scales" in name:
+                continue
             if param.requires_grad:
                 self.fp16_to_optimize['regular'].append((name, param))
 
@@ -136,8 +157,8 @@ class QZOTrainer(BaseZOTrainer):
         # Perturb Scales (Always)
         for name, param in self.fp16_to_optimize['scales']:
             z = torch.normal(mean=0, std=1, size=param.data.size(), device=param.data.device, dtype=param.data.dtype)
-            # Note: args.zo_scale used here as 'scale' in original code
-            param.data += scaling_factor * z * self.args.zo_eps * self.args.zo_scale
+            # Note: args.zoquantified_scale used here as 'scale' in original code
+            param.data += scaling_factor * z * self.args.zo_eps * self.args.zoquantified_scale
 
     def _update_qzo(self):
         torch.manual_seed(self.zo_random_seed)
@@ -166,8 +187,8 @@ class QZOTrainer(BaseZOTrainer):
             # but standard QZO code uses simple gradient descent with clamping for safety.
             # Original QZO: param.data = torch.clamp(param.data - lr * (grad * z) * scale, min=1e-7 * scale)
             
-            update = lr * (self.projected_grad * z) * self.args.zo_scale
-            param.data = torch.clamp(param.data - update, min=1e-7 * self.args.zo_scale)
+            update = lr * (self.projected_grad * z) * self.args.zoquantified_scale
+            param.data = torch.clamp(param.data - update, min=1e-7 * self.args.zoquantified_scale)
 
     def _update_qzo_momentum(self):
         torch.manual_seed(self.zo_random_seed)
@@ -197,5 +218,5 @@ class QZOTrainer(BaseZOTrainer):
             
             self.fp16_to_optimize_momentum['scales'][name] = beta * self.fp16_to_optimize_momentum['scales'][name] + (1 - beta) * z * self.projected_grad
             
-            update = lr * self.fp16_to_optimize_momentum['scales'][name] * self.args.zo_scale
-            param.data = torch.clamp(param.data - update, min=1e-7 * self.args.zo_scale)
+            update = lr * self.fp16_to_optimize_momentum['scales'][name] * self.args.zoquantified_scale
+            param.data = torch.clamp(param.data - update, min=1e-7 * self.args.zoquantified_scale)

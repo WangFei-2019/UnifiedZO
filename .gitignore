@@ -10,4 +10,4 @@ large_models/trainer/adalezo_trainer_ucb_noreplace.py
 **quantized_models/
 **gptqmodel_offload/
 *.log
-**tmp_bench
+**/*checkpoints*/
