@@ -1,11 +1,6 @@
+import logging
 import os
 import sys
-
-current_dir = os.path.dirname(os.path.abspath(__file__))
-parent_dir = os.path.dirname(current_dir)
-sys.path.append(parent_dir)
-
-import logging
 import json
 import random
 import time
@@ -29,9 +24,9 @@ from peft import get_peft_model, LoraConfig, PrefixTuningConfig, TaskType, Promp
 
 # --- Local Imports ---
 # Ensure these files are in the same directory or properly installed in PYTHONPATH
-from arguments import LMZOTrainingArguments
+from arguments import ZOTrainingArguments
 from tasks import get_task
-from zo_core.trainer import get_trainer_class, BaseZOTrainer
+from trainer import get_trainer_class, BaseZOTrainer
 from utils import (
     count_time,
     write_metrics_to_file,
@@ -54,7 +49,7 @@ logger = logging.getLogger(__name__)
 
 def main():
     # 1. Parse Arguments
-    parser = HfArgumentParser((LMZOTrainingArguments,))
+    parser = HfArgumentParser((ZOTrainingArguments,))
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
         # If we pass only one argument to the script and it's the path to a json file,
         # let's parse it to get our arguments.
@@ -171,7 +166,7 @@ def main():
     #     model.print_trainable_parameters()
     elif args.prefix_tuning:
         logger.info("Injecting Prefix Tuning via Custom MeZO Implementation...")
-        from zo_core.tuners import PrefixTuning 
+        from tuners import PrefixTuning 
         PrefixTuning(
             model, 
             num_prefix=args.num_prefix, 
@@ -220,7 +215,7 @@ def main():
     
     elif args.head_tuning:
         logger.info("Injecting Head Tuning via Custom Implementation...")
-        from zo_core.tuners import HeadTuning
+        from tuners import HeadTuning
         HeadTuning(model, args)
 
     # 5. Training Loop / Evaluation Loop
@@ -261,17 +256,17 @@ def main():
 
                 if args.trainer == "pzo" or args.trainer == "adapzo":
                     if args.logits:
-                        from zo_core.trainer.utils import forward_wrap_with_option_len_pzo_logits
+                        from trainer.utils import forward_wrap_with_option_len_pzo_logits
                         model.forward = forward_wrap_with_option_len_pzo_logits.__get__(model, type(model))
                     else:
-                        from zo_core.trainer.utils import  forward_wrap_with_option_len_pzo
+                        from trainer.utils import  forward_wrap_with_option_len_pzo
                         model.forward = forward_wrap_with_option_len_pzo.__get__(model, type(model))
                 elif args.trainer == "fzoo" or args.trainer == "adafzoo":
-                    from zo_core.trainer.utils import forward_wrap_with_option_len_fzoo
+                    from trainer.utils import forward_wrap_with_option_len_fzoo
                     model.forward = forward_wrap_with_option_len_fzoo.__get__(model, type(model))
                 else:
                     # MeZO, LoZO, HiZOO use ZO wrapper
-                    from zo_core.trainer.utils import forward_wrap_with_option_len
+                    from trainer.utils import forward_wrap_with_option_len
                     model.forward = forward_wrap_with_option_len.__get__(model, type(model))
 
             # --- Select Collator ---
@@ -304,7 +299,7 @@ def main():
 
                 # Linear Probing Branch
                 if args.linear_probing:
-                    from zo_core.tuners import perform_linear_probing
+                    from tuners import perform_linear_probing
                     # Call independent module, skipping standard trainer.train()
                     perform_linear_probing(args, model, tokenizer, train_dataset, collator)
                     logger.info("Linear Probing complete. Skipping standard ZO training loop.")

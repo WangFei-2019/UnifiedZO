@@ -2,13 +2,6 @@
 # Benchmark using Refactored Trainer Classes directly with PEFT support
 # Includes detailed Time Profiling (Perturb/Forward/Update) and Memory Statistics
 
-import os
-import sys
-
-current_dir = os.path.dirname(os.path.abspath(__file__))
-parent_dir = os.path.dirname(current_dir)
-sys.path.append(parent_dir)
-
 import torch
 import time
 import numpy as np
@@ -19,8 +12,8 @@ from torch.utils.data import Dataset
 from peft import get_peft_model, LoraConfig, TaskType
 
 # Import modules from the refactored code (ZO_all_code)
-from arguments import LMZOTrainingArguments
-from zo_core.trainer import get_trainer_class
+from arguments import ZOTrainingArguments
+from trainer import get_trainer_class
 
 # =============================================================================
 # 1. Profiled Step Functions
@@ -502,7 +495,7 @@ def profiled_lqzo_step(self, model, inputs, num_items_in_batch=None):
     # We reuse the same profiling wrapper.
     if hasattr(self, "step_counter"):
         self.step_counter += 1
-        
+
     return profiled_qzo_step(self, model, inputs, num_items_in_batch)
 
 # =============================================================================
@@ -861,22 +854,21 @@ def main_test(
     print(f"Steps:      {steps}")
 
     # 1. Args Setup
-    args = LMZOTrainingArguments(
+    args = ZOTrainingArguments(
         output_dir="./tmp_bench",
         per_device_train_batch_size=batch_size,
         trainer=method,
         use_cpu=False,
         zo_eps=1e-3,
         learning_rate=1e-6,
-        # # Method specifics
-        # zo_adamu_beta1=0.9, zo_adamu_beta2=0.999,
-        # lozo_rank=8, lozo_step_interval=100,
-        # hessian_smooth="constant1e-4", 
-        # sliding_window_length=14, momentum_fb_max=1.0,
-        # fzoo_n=4, adalezo_k_ratio=0.1,
-        # # QZO/LQZO Specifics
-        quant_method="gptq",
-        clip_zo_grad=True,
+        # Method specifics
+        zo_adamu_beta1=0.9, zo_adamu_beta2=0.999,
+        lozo_rank=8, lozo_step_interval=100,
+        hessian_smooth="constant1e-4", 
+        sliding_window_length=14, momentum_fb_max=1.0,
+        fzoo_n=4, adalezo_k_ratio=0.1,
+        # QZO/LQZO Specifics
+        quant_method="gptq", zo_scale=1.0, clip_zo_grad=True,
     )
 
     if peft_mode == "lora":
@@ -886,8 +878,16 @@ def main_test(
         args.prefix_init_by_real_act = False; args.reparam = False
 
     # 2. Load Model
-    print(f"Loading model: {model_path}...")
-    model = AutoModelForCausalLM.from_pretrained(model_path, device_map="auto", torch_dtype=torch.float16 if load_float16 else torch.float32)
+    try:
+        print(f"Loading model: {model_path}...")
+        model = AutoModelForCausalLM.from_pretrained(model_path, device_map="auto", torch_dtype=torch.float16 if load_float16 else torch.float32)
+    except Exception as e:
+        print(f"Warning: Could not load {model_path}. Creating Dummy OPT-1.3B. Error: {e}")
+        # Note: QZO won't work on dummy non-quantized model, but we keep fallback for generic testing
+        config = AutoConfig.from_pretrained("facebook/opt-1.3b")
+        model = AutoModelForCausalLM.from_config(config)
+        if load_float16: model = model.half()
+        model = model.cuda()
 
     model.eval()
 
@@ -896,7 +896,7 @@ def main_test(
         peft_config = LoraConfig(task_type=TaskType.CAUSAL_LM, inference_mode=False, r=args.lora_r, lora_alpha=args.lora_alpha, lora_dropout=0.0)
         model = get_peft_model(model, peft_config)
     elif peft_mode == "prefix":
-        from zo_core.tuners.prefix import PrefixTuning 
+        from tuners.prefix import PrefixTuning 
         PrefixTuning(model, num_prefix=args.num_prefix, reparam=args.reparam, float16=load_float16, init_by_real_act=args.prefix_init_by_real_act)
 
     # 4. Initialize Trainer
@@ -961,15 +961,15 @@ def main_test(
     # Select the correct Forward Wrapper based on the method
     if method in ["pzo", "adapzo"]:
         # PZO-based methods require a specific wrapper to extract gradients and states
-        from zo_core.trainer.utils import forward_wrap_with_option_len_pzo
+        from trainer.utils import forward_wrap_with_option_len_pzo
         model.forward = forward_wrap_with_option_len_pzo.__get__(model, type(model))
     elif method in ["fzoo", "adafzoo"]:
         # FZOO-based methods use a dedicated wrapper (handling 'n' argument)
-        from zo_core.trainer.utils import forward_wrap_with_option_len_fzoo
+        from trainer.utils import forward_wrap_with_option_len_fzoo
         model.forward = forward_wrap_with_option_len_fzoo.__get__(model, type(model))
     else:
         # Other methods (MeZO, LoZO, DiZO, QZO, LQZO, etc.) use the generic wrapper
-        from zo_core.trainer.utils import forward_wrap_with_option_len
+        from trainer.utils import forward_wrap_with_option_len
         model.forward = forward_wrap_with_option_len.__get__(model, type(model))
 
     # 5. Inputs
@@ -987,7 +987,7 @@ def main_test(
     print(f"Static Memory: {static_mem_gb:.4f} GB")
 
     # Accumulators
-    stats_acc = {"perturb": [], "forward": [], "update": [], "peak_mem": [], "overhead": [], "samples_per_sec": [], "tokens_per_sec": []}
+    stats_acc = {"perturb": [], "forward": [], "update": [], "peak_mem": [], "overhead": []}
 
     print(f"\n{'-'*105}")
     print(f"{'Step':<5} | {'Loss':<10} | {'Perturb(s)':<12} | {'Forward(s)':<12} | {'Update(s)':<12} | {'Peak(GB)':<10} | {'Overhead(MB)':<12}")
@@ -1021,11 +1021,6 @@ def main_test(
         peak_gb = peak_bytes / 1024**3
         overhead_mb = (peak_gb - static_mem_gb) * 1024
 
-        # Calculate Throughput
-        total_step_time = current_stats['perturb'] + current_stats['forward'] + current_stats['update']
-        samples_per_sec = batch_size / total_step_time if total_step_time > 0 else 0
-        tokens_per_sec = (batch_size * sequence_length) / total_step_time if total_step_time > 0 else 0
-
         # Print Row
         loss_val = loss.item() if isinstance(loss, torch.Tensor) else loss
         print(f"{i+1:<5} | {loss_val:<10.4f} | {current_stats['perturb']:<12.5f} | {current_stats['forward']:<12.5f} | {current_stats['update']:<12.5f} | {peak_gb:<10.4f} | {overhead_mb:<12.2f}")
@@ -1036,44 +1031,22 @@ def main_test(
         stats_acc["update"].append(current_stats['update'])
         stats_acc["peak_mem"].append(peak_gb)
         stats_acc["overhead"].append(overhead_mb)
-        stats_acc["samples_per_sec"].append(samples_per_sec)
-        stats_acc["tokens_per_sec"].append(tokens_per_sec)
 
     # Summary
     print(f"{'='*105}")
     print(f"AVERAGE STATISTICS ({method.upper()} + {peft_mode.upper()})")
     print(f"{'='*105}")
-    avg_perturb = np.mean(stats_acc['perturb'])
-    avg_forward = np.mean(stats_acc['forward'])
-    avg_update = np.mean(stats_acc['update'])
-    
-    print(f"Avg Perturb Time : {avg_perturb:.5f} s")
-    print(f"Avg Forward Time : {avg_forward:.5f} s")
-    print(f"Avg Update Time  : {avg_update:.5f} s")
+    print(f"Avg Perturb Time : {np.mean(stats_acc['perturb']):.5f} s")
+    print(f"Avg Forward Time : {np.mean(stats_acc['forward']):.5f} s")
+    print(f"Avg Update Time  : {np.mean(stats_acc['update']):.5f} s")
     print(f"{'-'*105}")
-    
-    total_time = avg_perturb + avg_forward + avg_update
+    total_time = np.mean(stats_acc['perturb']) + np.mean(stats_acc['forward']) + np.mean(stats_acc['update'])
     print(f"TOTAL STEP TIME  : {total_time:.5f} s")
-
-    if total_time > 0:
-        real_samples_per_sec = batch_size / total_time
-        real_tokens_per_sec = (batch_size * sequence_length) / total_time
-    else:
-        real_samples_per_sec = 0.0
-        real_tokens_per_sec = 0.0
-
     print(f"AVG PEAK MEMORY  : {np.mean(stats_acc['peak_mem']):.4f} GB")
     print(f"AVG OVERHEAD     : {np.mean(stats_acc['overhead']):.2f} MB")
-    
-    print(f"{'-'*105}")
-    print(f"THROUGHPUT METRICS (Corrected Calculation)")
-    print(f"{'-'*105}")
-
-    print(f"Real Samples/sec : {real_samples_per_sec:.2f} samples/s")
-    print(f"Real Tokens/sec  : {real_tokens_per_sec:.2f} tokens/s")
     print(f"{'='*105}")
 
 if __name__ == "__main__":
     Fire(main_test)
     # Example usage:
-    # CUDA_VISIBLE_DEVICES=0 python large_models/test_fake_time_memory.py 16 256 mezo none 20 True /workspace/wangfei154/models/facebook/opt-13b
+    # CUDA_VISIBLE_DEVICES=0 python test_fake_time_memory.py 16 256 mezo none 20 True /workspace/wangfei154/models/facebook/opt-13b

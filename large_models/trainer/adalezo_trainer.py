@@ -157,11 +157,11 @@ class AdaLeZOTrainer(BaseZOTrainer):
         # Restore Active Layers to original state (add 1)
         self._perturb_active_layers(scaling_factor=1)
         
-        # # --- 代码插入:Oracle 梯度相关性分析 ---
-        # # 每隔 N 步 (如 100 步) 运行一次，因为反向传播非常耗时
-        # if self.state.global_step % 100 == 0:
-        #     self._analyze_gradient_correlation(model, inputs)
-        # # -----------------------------------------------------
+        # --- [新增] 实验一代码插入点：Oracle 梯度相关性分析 ---
+        # 建议每隔 N 步 (如 100 步) 运行一次，因为反向传播非常耗时
+        if self.state.global_step % 100 == 0:
+            self._analyze_gradient_correlation(model, inputs)
+        # -----------------------------------------------------
 
         # 5. Update Parameters & Bandit Stats
         self._update_adalezo()
